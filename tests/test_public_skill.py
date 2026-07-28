@@ -35,6 +35,12 @@ class PublicSkillPrivacyTests(unittest.TestCase):
 
 
 class PortableClientTests(unittest.TestCase):
+    def test_settings_uses_the_api_subdomain_by_default(self):
+        client = load_public_client()
+
+        with patch.dict(os.environ, {"LUMENVERBA_API_KEY": "test-key"}, clear=True):
+            self.assertEqual(client.Settings.from_environment().base_url, "https://api.lumenverba.cc/v1")
+
     def test_defaults_are_used_for_a_generation_payload(self):
         client = load_public_client()
 

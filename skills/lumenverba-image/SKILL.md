@@ -45,4 +45,4 @@ Remove-Variable plainKey
 Write-Host "配置完成。请完全退出并重新打开 Codex，然后重新发送生图请求。"
 ```
 
-API 地址固定为 `https://lumenverba.cc/v1`，不要求用户配置 URL。
+API 地址固定为 `https://api.lumenverba.cc/v1`，不要求用户配置 URL。

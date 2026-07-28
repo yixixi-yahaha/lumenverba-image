@@ -15,7 +15,7 @@ import urllib.request
 from pathlib import Path
 
 
-DEFAULT_BASE_URL = "https://lumenverba.cc/v1"
+DEFAULT_BASE_URL = "https://api.lumenverba.cc/v1"
 DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_SIZE = "1536x1024"
 DEFAULT_QUALITY = "standard"

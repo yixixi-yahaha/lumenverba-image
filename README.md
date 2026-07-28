@@ -25,7 +25,7 @@ Remove-Variable plainKey
 Write-Host "配置完成。请完全退出并重新打开 Codex，然后重新发送生图请求。"
 ```
 
-技能固定使用 `https://lumenverba.cc/v1`，无需配置 API 地址。
+技能固定使用 `https://api.lumenverba.cc/v1`，无需配置 API 地址。
 
 ## 功能
 
