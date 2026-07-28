@@ -1,0 +1,109 @@
+import base64
+import importlib.util
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SKILL_ROOT = ROOT / "skills" / "lumenverba-image"
+SCRIPT_PATH = SKILL_ROOT / "scripts" / "lumenverba_image.py"
+PUBLIC_FILES = (ROOT / "README.md", SKILL_ROOT / "SKILL.md", SCRIPT_PATH)
+PNG_BYTES = b"\x89PNG\r\n\x1a\nexample"
+
+
+def load_public_client():
+    spec = importlib.util.spec_from_file_location("public_lumenverba_client", SCRIPT_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("无法加载公开客户端脚本")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class PublicSkillPrivacyTests(unittest.TestCase):
+    def test_public_files_do_not_include_this_machine_path_or_key_assignment(self):
+        forbidden_paths = {str(Path.home()), str(ROOT)}
+        for path in PUBLIC_FILES:
+            content = path.read_text(encoding="utf-8")
+            for forbidden in forbidden_paths:
+                self.assertNotIn(forbidden, content, f"公开文件泄露了本机路径: {path}")
+            self.assertNotIn("LUMENVERBA_API_KEY=", content, f"公开文件包含密钥赋值: {path}")
+
+
+class PortableClientTests(unittest.TestCase):
+    def test_defaults_are_used_for_a_generation_payload(self):
+        client = load_public_client()
+
+        payload = client.build_generation_request("海鸥在码头吃薯条")
+
+        self.assertEqual(payload["model"], "gpt-image-2")
+        self.assertEqual(payload["size"], "1536x1024")
+        self.assertEqual(payload["quality"], "standard")
+        self.assertTrue(payload["stream"])
+        self.assertEqual(payload["partial_images"], 1)
+
+    def test_missing_key_is_rejected(self):
+        client = load_public_client()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "未设置 LUMENVERBA_API_KEY"):
+                client.Settings.from_environment()
+
+    def test_text_prompt_requires_verbatim_readable_text(self):
+        client = load_public_client()
+
+        prompt = client.build_text_prompt("夏日特惠", "柠檬汽水海报", "zh-CN", "center", "粗体无衬线")
+
+        self.assertIn('"夏日特惠"', prompt)
+        self.assertIn("逐字准确", prompt)
+        self.assertIn("清晰可读", prompt)
+
+    def test_sse_final_image_is_saved_as_png(self):
+        client = load_public_client()
+        encoded = base64.b64encode(PNG_BYTES).decode("ascii")
+        response = (
+            'data: {"type":"image_generation.partial_image","b64_json":"partial"}\n\n'
+            f'data: {{"type":"image_generation.completed","b64_json":"{encoded}"}}\n\n'
+        ).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = client.save_response_image(response, "text/event-stream", Path(directory))
+
+            self.assertEqual(result.read_bytes(), PNG_BYTES)
+            self.assertEqual(result.suffix, ".png")
+
+    def test_edit_request_contains_each_reference_image(self):
+        client = load_public_client()
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "first.png"
+            second = Path(directory) / "second.png"
+            first.write_bytes(PNG_BYTES)
+            second.write_bytes(PNG_BYTES)
+
+            body, content_type = client.build_edit_request("保留人物姿势", [first, second], "gpt-image-2", "1024x1024", "standard")
+
+        self.assertIn(b'name="image[]"; filename="first.png"', body)
+        self.assertIn(b'name="image[]"; filename="second.png"', body)
+        self.assertIn("multipart/form-data", content_type)
+
+
+class PackagedSkillTests(unittest.TestCase):
+    def test_skill_documents_secure_first_use_and_all_modes(self):
+        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        for expected in (
+            "generate",
+            "edit",
+            "text",
+            "gpt-image-2",
+            "1536x1024",
+            "standard",
+            "Read-Host",
+            "AsSecureString",
+            "SetEnvironmentVariable",
+            "完全退出并重新打开 Codex",
+        ):
+            self.assertIn(expected, content)
