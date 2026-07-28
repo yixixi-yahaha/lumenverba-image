@@ -14,6 +14,8 @@ npx.cmd skills add yixixi-yahaha/lumenverba-image@lumenverba-image -g -y
 
 ## 首次配置密钥
 
+本技能调用的生图模型由 [Lumenverba](https://lumenverba.cc/home) 中转站提供。请先在该站点创建 API 密钥，再完成下方配置。
+
 不要在聊天中发送 API 密钥。在 PowerShell 中粘贴并运行以下代码，输入时内容不会显示：
 
 ```powershell
@@ -26,6 +28,28 @@ Write-Host "配置完成。请完全退出并重新打开 Codex，然后重新�
 ```
 
 技能固定使用 `https://api.lumenverba.cc/v1`，无需配置 API 地址。
+
+## 快速使用
+
+完成安装、配置密钥并重新打开 Codex 后，直接用自然语言提出绘图请求即可。用户明确给出的 `model`、`size`、`quality` 会优先使用；未给出时使用默认值 `gpt-image-2`、`1536x1024`、`standard`。
+
+文生图：
+
+```text
+使用 Lumenverba 绘图生成一幅雨夜广州街头的赛博朋克电影海报，16:9，高质量。
+```
+
+参考图生图：将参考图附到 Codex 对话中，再说明需要保留或改变的内容。
+
+```text
+参考这张图片中的角色，生成一幅末世上海街头的废土朋克海报，Q 版角色，size 为 1024x1536，quality 为 high。
+```
+
+指定文字生图：将需要准确显示的文字用引号标出，并说明画面和文字位置。
+
+```text
+生成一张柠檬汽水促销海报，中央必须清晰、完整、逐字显示“夏日特惠”，使用中文粗体字，quality 为 high。
+```
 
 ## 功能
 
