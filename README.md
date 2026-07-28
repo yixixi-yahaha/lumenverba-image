@@ -6,6 +6,18 @@
 
 需要 Codex 和 Python 3.11 或更高版本：
 
+### 在 Codex 对话中安装
+
+新建一个 Codex 对话，直接发送以下内容即可，无需打开终端：
+
+```text
+请从 https://github.com/yixixi-yahaha/lumenverba-image 安装 lumenverba-image 技能。
+```
+
+安装完成后，完全退出并重新打开 Codex。
+
+### 使用命令安装
+
 ```powershell
 npx.cmd skills add yixixi-yahaha/lumenverba-image@lumenverba-image -g -y
 ```
@@ -16,7 +28,7 @@ npx.cmd skills add yixixi-yahaha/lumenverba-image@lumenverba-image -g -y
 
 本技能调用的生图模型由 [Lumenverba](https://lumenverba.cc/home) 中转站提供。请先在该站点创建 API 密钥，再完成下方配置。
 
-不要在聊天中发送 API 密钥。在 PowerShell 中粘贴并回车运行以下代码，输入时内容不会显示：
+不要在聊天中发送 API 密钥。在 PowerShell 中粘贴并运行以下代码，输入时内容不会显示：
 
 ```powershell
 $OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
