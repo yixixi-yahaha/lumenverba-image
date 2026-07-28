@@ -16,7 +16,7 @@ npx.cmd skills add yixixi-yahaha/lumenverba-image@lumenverba-image -g -y
 
 本技能调用的生图模型由 [Lumenverba](https://lumenverba.cc/home) 中转站提供。请先在该站点创建 API 密钥，再完成下方配置。
 
-不要在聊天中发送 API 密钥。在 PowerShell 中粘贴并运行以下代码，输入时内容不会显示：
+不要在聊天中发送 API 密钥。在 PowerShell 中粘贴并回车运行以下代码，输入时内容不会显示：
 
 ```powershell
 $OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
