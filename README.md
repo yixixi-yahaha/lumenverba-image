@@ -30,6 +30,20 @@ npx.cmd skills add yixixi-yahaha/lumenverba-image@lumenverba-image -g -y
 
 若出现 `WinError 10013`，表示当前 Codex 会话的网络策略拦截了请求，图片尚未提交到 Lumenverba。请在允许联网的 Codex 会话中重新发送原请求；无需重新创建或粘贴 API 密钥。
 
+首次生成前，可在 Codex 对话中直接发送：
+
+```text
+请使用 lumenverba-image 生成图片，并在执行前申请 Lumenverba 所需的联网权限。我会在弹出的授权提示中允许该请求。
+```
+
+若已经出现过 `WinError 10013`，可发送：
+
+```text
+请重新执行刚才的 Lumenverba 生图请求，并在执行前申请联网权限。
+```
+
+出现联网授权提示后选择允许，随后 Codex 会继续执行生图；不要在对话中提供 API 密钥。
+
 ## 首次配置密钥
 
 本技能调用的生图模型由 [Lumenverba](https://lumenverba.cc/home) 中转站提供。请先在该站点创建 API 密钥，再完成下方配置。
