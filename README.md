@@ -61,6 +61,27 @@ Write-Host "配置完成。请完全退出并重新打开 Codex，然后重新�
 
 技能固定使用 `https://api.lumenverba.cc/v1`，无需配置 API 地址。
 
+## 干净卸载
+
+仅删除技能目录不会清除首次配置时写入的用户环境变量。若不再使用本技能，可在 Codex 对话中发送：
+
+```text
+请卸载 lumenverba-image（Lumenverba 绘图）技能，并删除用户环境变量 LUMENVERBA_API_KEY。不要显示密钥，也不要删除生成的图片或修改其他环境变量。完成后只报告技能目录和密钥是否仍存在，并提醒我完全退出并重新打开 Codex。
+```
+
+也可以在 PowerShell 中手动清理密钥：
+
+```powershell
+$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Environment]::SetEnvironmentVariable("LUMENVERBA_API_KEY", $null, "User")
+Remove-Item Env:LUMENVERBA_API_KEY -ErrorAction SilentlyContinue
+$keyStillExists = -not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable("LUMENVERBA_API_KEY", "User"))
+Write-Host "用户环境变量仍存在: $keyStillExists"
+Remove-Variable keyStillExists
+```
+
+命令应显示 `用户环境变量仍存在: False`。已经运行的 Codex 进程仍可能保留启动时继承的旧值，因此清理后必须完全退出 Codex、结束后台进程并重新打开。干净卸载不会删除此前生成的图片，也不会修改其他环境变量。
+
 ## 快速使用
 
 完成安装、配置密钥并重新打开 Codex 后，直接用自然语言提出绘图请求即可。用户明确给出的 `model`、`size`、`quality` 会优先使用；未给出时使用默认值 `gpt-image-2`、`1536x1024`、`standard`。

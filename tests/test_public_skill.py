@@ -133,6 +133,20 @@ class PortableClientTests(unittest.TestCase):
 
 
 class PackagedSkillTests(unittest.TestCase):
+    def test_readme_documents_clean_uninstall(self):
+        content = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "## 干净卸载",
+            "请卸载 lumenverba-image（Lumenverba 绘图）技能",
+            '[Environment]::SetEnvironmentVariable("LUMENVERBA_API_KEY", $null, "User")',
+            "Remove-Item Env:LUMENVERBA_API_KEY",
+            "不要显示密钥",
+            "不要删除生成的图片或修改其他环境变量",
+            "完全退出并重新打开 Codex",
+        ):
+            self.assertIn(expected, content)
+
     def test_skill_forbids_inline_python_and_documents_safe_quoting(self):
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
