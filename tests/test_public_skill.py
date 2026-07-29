@@ -35,6 +35,20 @@ class PublicSkillPrivacyTests(unittest.TestCase):
 
 
 class PortableClientTests(unittest.TestCase):
+    def test_text_arguments_preserve_shell_sensitive_characters(self):
+        client = load_public_client()
+
+        arguments = client._parser().parse_args([
+            "text",
+            "--text",
+            "“夏日$特惠” O'Reilly `test`",
+            "--description",
+            '海报包含 "ASCII quotes" 与 $price',
+        ])
+
+        self.assertEqual(arguments.text, "“夏日$特惠” O'Reilly `test`")
+        self.assertEqual(arguments.description, '海报包含 "ASCII quotes" 与 $price')
+
     def test_settings_uses_the_api_subdomain_by_default(self):
         client = load_public_client()
 
@@ -119,6 +133,17 @@ class PortableClientTests(unittest.TestCase):
 
 
 class PackagedSkillTests(unittest.TestCase):
+    def test_skill_forbids_inline_python_and_documents_safe_quoting(self):
+        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "不得使用 `python -c`",
+            "`text --text --description`",
+            "PowerShell",
+            "单引号写成两个单引号",
+        ):
+            self.assertIn(expected, content)
+
     def test_skill_documents_secure_first_use_and_all_modes(self):
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         for expected in (

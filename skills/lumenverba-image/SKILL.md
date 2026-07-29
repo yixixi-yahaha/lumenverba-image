@@ -12,6 +12,9 @@ description: Use when the user asks to generate images with Lumenverba, includin
 - 文生图使用 `generate --prompt`。
 - 参考图生图使用 `edit --prompt --reference <绝对图片路径>`；可重复传入多个 `--reference`。
 - 指定文字生图使用 `text --text --description`，并把文字语言、位置和样式传给 `--language`、`--position`、`--style`。
+- 直接执行同级 `scripts/lumenverba_image.py`；不得使用 `python -c`、内联 Python 或动态拼接 Python 源码。
+- 在 PowerShell 中，把提示词、指定文字和描述等动态文本参数放在单引号内；参数内容中的单引号写成两个单引号。例如 `--text 'O''Reilly 夏日$特惠'`。`$`、反引号和双引号在这种写法中会按原文传入。
+- 文字生图固定使用 `text` 子命令，不要手动为指定文字添加引号；脚本会在 `build_text_prompt()` 中构造逐字准确约束。
 - 执行时以技能目录中的 `scripts/lumenverba_image.py` 为脚本路径。将生成图片的绝对路径作为结果返回，并用 Markdown 图片链接展示。
 
 ## 联网权限
