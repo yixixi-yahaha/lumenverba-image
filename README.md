@@ -24,6 +24,12 @@ npx.cmd skills add yixixi-yahaha/lumenverba-image@lumenverba-image -g -y
 
 安装完成后，重新打开 Codex。技能会在文生图、参考图生图、海报、角色图、插画或包含指定清晰文字的图片请求中自动启用。
 
+## 联网授权
+
+生成图片需要连接 Lumenverba API。首次生图时，Codex 可能会请求联网权限，请在弹出的提示中允许该请求。
+
+若出现 `WinError 10013`，表示当前 Codex 会话的网络策略拦截了请求，图片尚未提交到 Lumenverba。请在允许联网的 Codex 会话中重新发送原请求；无需重新创建或粘贴 API 密钥。
+
 ## 首次配置密钥
 
 本技能调用的生图模型由 [Lumenverba](https://lumenverba.cc/home) 中转站提供。请先在该站点创建 API 密钥，再完成下方配置。

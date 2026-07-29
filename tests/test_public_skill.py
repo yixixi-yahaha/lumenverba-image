@@ -111,5 +111,8 @@ class PackagedSkillTests(unittest.TestCase):
             "AsSecureString",
             "SetEnvironmentVariable",
             "完全退出并重新打开 Codex",
+            "require_escalated",
+            "联网权限",
+            "WinError 10013",
         ):
             self.assertIn(expected, content)

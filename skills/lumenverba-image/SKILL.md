@@ -14,6 +14,12 @@ description: Use when the user asks to generate images with Lumenverba, includin
 - 指定文字生图使用 `text --text --description`，并把文字语言、位置和样式传给 `--language`、`--position`、`--style`。
 - 执行时以技能目录中的 `scripts/lumenverba_image.py` 为脚本路径。将生成图片的绝对路径作为结果返回，并用 Markdown 图片链接展示。
 
+## 联网权限
+
+- 生图前必须通过命令执行工具以 `sandbox_permissions: "require_escalated"` 申请联网权限，并在说明中告知用户该请求会访问 `https://api.lumenverba.cc/v1` 生成图片。
+- 用户批准联网权限后再运行脚本；不要先在受限沙箱中调用并等待失败后才请求授权。
+- 若用户拒绝授权或脚本返回 `WinError 10013`，说明请求在本机网络策略中被拦截、尚未到达 Lumenverba API。明确提示用户在允许联网的 Codex 会话中重试；不要要求更换或粘贴密钥。
+
 ## 参数选择
 
 用户明确指定的 `model`、`size`、`quality` 优先，原样传递。未指定时按以下规则选择：
