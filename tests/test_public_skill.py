@@ -82,6 +82,27 @@ class PortableClientTests(unittest.TestCase):
             self.assertEqual(result.read_bytes(), PNG_BYTES)
             self.assertEqual(result.suffix, ".png")
 
+    def test_accepted_generation_polls_its_task_until_a_png_is_available(self):
+        client = load_public_client()
+        encoded = base64.b64encode(PNG_BYTES).decode("ascii")
+        responses = [
+            (202, {"Location": "/v1/tasks/task-123"}, b'{"id":"task-123","status":"queued"}'),
+            (200, {}, b'{"id":"task-123","status":"queued"}'),
+            (200, {}, json.dumps({"data": [{"b64_json": encoded}]}).encode("utf-8")),
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            settings = client.Settings("test-key")
+            with patch.object(client, "_send", side_effect=responses) as send, patch.object(client.time, "sleep") as sleep:
+                result = client._request_image("/images/generations", b"{}", "application/json", settings, Path(directory))
+            self.assertEqual(result.read_bytes(), PNG_BYTES)
+
+        self.assertEqual(send.call_args_list[0].args[0], "POST")
+        self.assertEqual(send.call_args_list[1].args[0], "GET")
+        self.assertEqual(send.call_args_list[1].args[1], "https://api.lumenverba.cc/v1/tasks/task-123")
+        self.assertEqual(send.call_args_list[2].args[0], "GET")
+        sleep.assert_called_once_with(1)
+
     def test_edit_request_contains_each_reference_image(self):
         client = load_public_client()
         with tempfile.TemporaryDirectory() as directory:

@@ -9,6 +9,7 @@ import mimetypes
 import os
 import secrets
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,6 +26,8 @@ ALLOWED_QUALITIES = {"low", "standard", "high"}
 MAX_REFERENCE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 TIMEOUT_SECONDS = 600
+MAX_TASK_POLL_ATTEMPTS = 60
+TASK_POLL_INTERVAL_SECONDS = 1
 
 
 class Settings:
@@ -179,6 +182,53 @@ def save_response_image(body: bytes, content_type: str, output_dir: Path, settin
     return _save_png(image_bytes, output_dir)
 
 
+def _task_location(headers: dict[str, str], settings: Settings) -> str:
+    location = next((value for key, value in headers.items() if key.lower() == "location"), None)
+    if not location:
+        raise RuntimeError("图像服务返回了异步任务，但没有任务地址。")
+    task_url = urllib.parse.urljoin(f"{settings.base_url}/", location)
+    parsed = urllib.parse.urlsplit(task_url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise RuntimeError("图像服务返回了不安全的任务地址。")
+    return task_url
+
+
+def _task_status(body: bytes) -> str:
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    status = payload.get("status")
+    if isinstance(status, str):
+        return status.lower()
+    data = payload.get("data")
+    if isinstance(data, dict) and isinstance(data.get("status"), str):
+        return data["status"].lower()
+    return ""
+
+
+def _wait_for_task(task_url: str, settings: Settings, output_dir: Path) -> Path:
+    pending_statuses = {"queued", "pending", "processing", "running", "in_progress"}
+    failed_statuses = {"failure", "failed", "error", "cancelled"}
+    for attempt in range(MAX_TASK_POLL_ATTEMPTS):
+        status, headers, response = _send("GET", task_url, _headers(settings))
+        if not 200 <= status < 300:
+            raise RuntimeError(f"图像任务查询返回 HTTP {status}。")
+        try:
+            return save_response_image(response, headers.get("Content-Type", ""), output_dir, settings)
+        except RuntimeError as error:
+            task_status = _task_status(response)
+            if task_status in failed_statuses:
+                raise RuntimeError(f"图像任务失败: {task_status}。") from error
+            if task_status not in pending_statuses:
+                raise
+        if attempt + 1 < MAX_TASK_POLL_ATTEMPTS:
+            time.sleep(TASK_POLL_INTERVAL_SECONDS)
+    raise RuntimeError("图像任务在等待期间未完成。")
+
+
 def _is_supported_image(path: Path) -> bool:
     signature = path.read_bytes()[:12]
     return signature.startswith(b"\x89PNG\r\n\x1a\n") or signature.startswith(b"\xff\xd8\xff") or signature.startswith((b"GIF87a", b"GIF89a")) or (signature.startswith(b"RIFF") and signature[8:12] == b"WEBP")
@@ -209,6 +259,8 @@ def _request_image(endpoint: str, body: bytes, content_type: str, settings: Sett
     status, headers, response = _send("POST", f"{settings.base_url}{endpoint}", {**_headers(settings), "Content-Type": content_type}, body)
     if not 200 <= status < 300:
         raise RuntimeError(f"图像服务返回 HTTP {status}。")
+    if status == 202:
+        return _wait_for_task(_task_location(headers, settings), settings, output_dir)
     return save_response_image(response, headers.get("Content-Type", ""), output_dir, settings)
 
 
