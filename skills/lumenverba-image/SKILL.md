@@ -5,7 +5,9 @@ description: Use when the user asks to generate images with Lumenverba, includin
 
 # Lumenverba 绘图
 
-使用本技能同级 `scripts/lumenverba_image.py` 直接调用 Lumenverba 图像 API。执行前先从当前 `SKILL.md` 的实际位置推导技能目录；不得使用固定的本机绝对路径，也不调用旧 MCP 服务。
+使用本技能同级 `scripts/lumenverba_image.py` 直接调用 Lumenverba 图像 API。执行前先从当前 `SKILL.md` 的实际位置推导技能目录，再得到脚本路径；不得使用固定的本机绝对路径，也不调用旧 MCP 服务。
+
+先在离线环境检查系统 Python 是否为 3.11 或更高版本。系统 Python 不可用时，调用 `load_workspace_dependencies`，使用其返回的 Python 解释器执行该脚本。不得猜测解释器路径。
 
 ## 调用规则
 
@@ -15,13 +17,16 @@ description: Use when the user asks to generate images with Lumenverba, includin
 - 直接执行同级 `scripts/lumenverba_image.py`；不得使用 `python -c`、内联 Python 或动态拼接 Python 源码。
 - 在 PowerShell 中，把提示词、指定文字和描述等动态文本参数放在单引号内；参数内容中的单引号写成两个单引号。例如 `--text 'O''Reilly 夏日$特惠'`。`$`、反引号和双引号在这种写法中会按原文传入。
 - 文字生图固定使用 `text` 子命令，不要手动为指定文字添加引号；脚本会在 `build_text_prompt()` 中构造逐字准确约束。
-- 执行时以技能目录中的 `scripts/lumenverba_image.py` 为脚本路径。将生成图片的绝对路径作为结果返回，并用 Markdown 图片链接展示。
+- 执行时以技能目录中的 `scripts/lumenverba_image.py` 为脚本路径。
+- 先完成提示词、`generate`、`edit` 或 `text` 子命令，以及 `--output-dir` 的确定；仅在最终命令已经确定后，申请一次联网权限并执行。不使用 `require_escalated` 参数或为其提供任何指导。
+- 成功时 stdout 只能输出生成 PNG 的绝对路径；失败时仅向 stderr 输出错误并以非零状态退出。将该绝对 PNG 路径作为结果返回，并用 Markdown 图片链接展示。
 
 ## 联网权限
 
-- 生图前必须通过命令执行工具以 `sandbox_permissions: "require_escalated"` 申请联网权限，并在说明中告知用户该请求会访问 `https://api.lumenverba.cc/v1` 生成图片。
-- 用户批准联网权限后再运行脚本；不要先在受限沙箱中调用并等待失败后才请求授权。
+- 最终命令确定后才申请一次联网权限，并在说明中告知用户该请求会访问 `https://api.lumenverba.cc/v1` 生成图片。
+- 用户批准联网权限后再运行脚本；不要先在受限环境中调用并等待失败后才请求授权。
 - 若用户拒绝授权或脚本返回 `WinError 10013`，说明请求在本机网络策略中被拦截、尚未到达 Lumenverba API。明确提示用户在允许联网的 Codex 会话中重试；不要要求更换或粘贴密钥。
+- 若出现网络异常，脚本会报告“生成状态未知”，不自动重试 POST 请求。已接受的 `202` 图像任务会继续按任务地址轮询。
 
 ## 参数选择
 

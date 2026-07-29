@@ -102,7 +102,7 @@ def _send(method: str, url: str, headers: dict[str, str], body: bytes = b"") -> 
     except urllib.error.HTTPError as error:
         return error.code, dict(error.headers.items()), error.read(MAX_IMAGE_BYTES + 1)
     except urllib.error.URLError as error:
-        raise RuntimeError(f"调用图像服务失败: {error.reason}") from error
+        raise RuntimeError("调用图像服务失败，生成状态未知，请勿自动重试。") from error
 
 
 def _extract_image(payload: object) -> dict[str, object] | None:

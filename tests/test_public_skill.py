@@ -73,6 +73,15 @@ class PortableClientTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "未设置 LUMENVERBA_API_KEY"):
                 client.Settings.from_environment()
 
+    def test_network_error_reports_unknown_generation_state_without_retrying(self):
+        client = load_public_client()
+
+        with patch.object(client.urllib.request, "urlopen", side_effect=client.urllib.error.URLError("TLS EOF")) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "生成状态未知"):
+                client._send("POST", "https://api.lumenverba.cc/v1/images/generations", {})
+
+        urlopen.assert_called_once()
+
     def test_text_prompt_requires_verbatim_readable_text(self):
         client = load_public_client()
 
@@ -95,6 +104,39 @@ class PortableClientTests(unittest.TestCase):
 
             self.assertEqual(result.read_bytes(), PNG_BYTES)
             self.assertEqual(result.suffix, ".png")
+
+    def test_https_image_url_is_downloaded_and_saved_as_png(self):
+        client = load_public_client()
+        response = json.dumps({"data": [{"url": "https://cdn.example.test/image.png"}]}).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(client, "_send", return_value=(200, {"Content-Type": "image/png"}, PNG_BYTES)) as send:
+                result = client.save_response_image(response, "application/json", Path(directory), client.Settings("test-key"))
+
+            self.assertEqual(result.read_bytes(), PNG_BYTES)
+            self.assertEqual(result.suffix, ".png")
+
+        send.assert_called_once_with("GET", "https://cdn.example.test/image.png", {})
+
+    def test_https_image_url_rejects_non_png_content_type(self):
+        client = load_public_client()
+        response = json.dumps({"data": [{"url": "https://cdn.example.test/image.png"}]}).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(client, "_send", return_value=(200, {"Content-Type": "text/html"}, PNG_BYTES)) as send:
+                with self.assertRaisesRegex(RuntimeError, "下载生成图像失败"):
+                    client.save_response_image(response, "application/json", Path(directory), client.Settings("test-key"))
+
+        send.assert_called_once_with("GET", "https://cdn.example.test/image.png", {})
+
+    def test_non_png_image_response_is_rejected(self):
+        client = load_public_client()
+        encoded = base64.b64encode(b"not a png").decode("ascii")
+        response = json.dumps({"data": [{"b64_json": encoded}]}).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "不是 PNG"):
+                client.save_response_image(response, "application/json", Path(directory))
 
     def test_accepted_generation_polls_its_task_until_a_png_is_available(self):
         client = load_public_client()
@@ -131,8 +173,50 @@ class PortableClientTests(unittest.TestCase):
         self.assertIn(b'name="image[]"; filename="second.png"', body)
         self.assertIn("multipart/form-data", content_type)
 
+    def test_edit_request_rejects_relative_reference_path(self):
+        client = load_public_client()
+
+        with self.assertRaisesRegex(ValueError, "绝对路径"):
+            client.build_edit_request("保留人物姿势", [Path("relative.png")], "gpt-image-2", "1024x1024", "standard")
+
+    def test_edit_request_rejects_oversized_reference_image(self):
+        client = load_public_client()
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "large.png"
+            image.write_bytes(PNG_BYTES + b"x" * client.MAX_REFERENCE_BYTES)
+
+            with self.assertRaisesRegex(ValueError, "文件过大"):
+                client.build_edit_request("保留人物姿势", [image], "gpt-image-2", "1024x1024", "standard")
+
 
 class PackagedSkillTests(unittest.TestCase):
+    def test_readme_documents_installation_and_release_contracts(self):
+        content = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "https://api.lumenverba.cc/v1",
+            'npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.0/skills/lumenverba-image" -g -y',
+            "/tree/v1.0.0/skills/lumenverba-image",
+            "发布门禁",
+            "默认测试",
+            "PR 不联网",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, content)
+
+    def test_skill_documents_runtime_and_network_failure_contracts(self):
+        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "https://api.lumenverba.cc/v1",
+            "--output-dir",
+            "load_workspace_dependencies",
+            "生成状态未知",
+            "不自动重试",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, content)
+
     def test_readme_documents_clean_uninstall(self):
         content = (ROOT / "README.md").read_text(encoding="utf-8")
 

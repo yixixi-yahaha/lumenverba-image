@@ -11,7 +11,7 @@
 新建一个 Codex 对话，直接发送以下内容即可，无需打开终端：
 
 ```text
-请从 https://github.com/yixixi-yahaha/lumenverba-image 安装 lumenverba-image 技能。
+请从 https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.0/skills/lumenverba-image 安装 lumenverba-image 技能。
 ```
 
 安装完成后，完全退出并重新打开 Codex。
@@ -19,7 +19,7 @@
 ### 使用命令安装
 
 ```powershell
-npx.cmd skills add yixixi-yahaha/lumenverba-image@lumenverba-image -g -y
+npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.0/skills/lumenverba-image" -g -y
 ```
 
 安装完成后，重新打开 Codex。技能会在文生图、参考图生图、海报、角色图、插画或包含指定清晰文字的图片请求中自动启用。
@@ -111,3 +111,7 @@ Remove-Variable keyStillExists
 - 文字生图：要求图中完整呈现指定、清晰可读的文字。
 
 默认使用模型 `gpt-image-2`、尺寸 `1536x1024` 和质量 `standard`。可用模型为 `gpt-image-1`、`gpt-image-1.5`、`gpt-image-2`；可用尺寸为 `1024x1024`、`1536x1024`、`1024x1536`；可用质量为 `low`、`standard`、`high`。用户显式指定的参数始终优先。
+
+## 发布门禁
+
+默认测试和 PR 不联网。发布前必须依次完成离线单元测试、CLI 契约测试，以及一次人工无文字 API PNG 冒烟测试。仅当改动涉及文字生成或文字提示词时，才额外人工核验中文文字图的逐字准确与清晰可读性。
