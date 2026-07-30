@@ -9,6 +9,11 @@ description: Use when the user asks to generate images with Lumenverba, includin
 
 先在离线环境检查系统 Python 是否为 3.11 或更高版本。系统 Python 不可用时，调用 `load_workspace_dependencies`，使用其返回的 Python 解释器执行该脚本。不得猜测解释器路径。
 
+## 专用边界
+
+- 仅在用户明确要求使用 Lumenverba 时调用本技能；通用绘图请求使用原生 Image-Gen。
+- 透明背景、抠图或 Alpha 通道验证需求使用原生 Image-Gen，不为本技能增加后处理流程。
+- 多个不同素材不批量提交；每项均需逐项确认和生成，避免未确认的计费请求。
 ## 调用规则
 
 - 文生图使用 `generate --prompt`。
@@ -21,6 +26,10 @@ description: Use when the user asks to generate images with Lumenverba, includin
 - 先完成提示词、`generate`、`edit` 或 `text` 子命令，以及 `--output-dir` 的确定；仅在最终命令已经确定后，申请一次联网权限并执行。不使用 `require_escalated` 参数或为其提供任何指导。
 - 成功时 stdout 只能输出生成 PNG 的绝对路径；失败时仅向 stderr 输出错误并以非零状态退出。将该绝对 PNG 路径作为结果返回，并用 Markdown 图片链接展示。
 
+## 参考图与编辑
+
+- 对每张参考图先明确其角色：编辑目标、风格参考或构图参考；把角色和用途写入提示词，不把它们当作 API 参数。
+- `edit` 请求只改变用户指定的部分，并把人物身份、姿势、服装、主体边缘、构图等需要保留的内容逐项写为不变量；缺少改动范围或保持范围时先询问用户。
 ## 联网权限
 
 - 最终命令确定后才申请一次联网权限，并在说明中告知用户该请求会访问 `https://api.lumenverba.cc/v1` 生成图片。
@@ -46,6 +55,11 @@ description: Use when the user asks to generate images with Lumenverba, includin
 
 文字生图必须写明文字内容需要逐字准确、清晰可读、完整显示，且不得添加未要求的文字。脚本会加入这一约束；对于正式海报或包含大量文字的画面，优先选择 `high`。
 
+## 提示词与验收
+
+- 请求信息不足时，使用主体、场景、风格、构图、光线、准确文字和限制补足提示词；用户已明确的内容只做结构化表达，不擅自添加创意元素。
+- 始终校验返回文件为 PNG 且路径为绝对路径。指定文字、参考图编辑或明确视觉约束的请求，还应视觉检查结果是否满足文字可读性和编辑不变量。
+- 首次结果不满足时，报告结果和绝对路径，等待用户明确要求调整或重试；不得自动再次生成。
 ## 缺少密钥
 
 若脚本返回“未设置 LUMENVERBA_API_KEY 环境变量”，不要让用户在聊天中粘贴密钥，也不要显示或记录密钥。只回复以下 PowerShell 代码块，并提示用户完全退出并重新打开 Codex 后重试：

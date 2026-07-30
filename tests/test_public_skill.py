@@ -242,6 +242,23 @@ class PackagedSkillTests(unittest.TestCase):
         ):
             self.assertIn(expected, content)
 
+    def test_skill_documents_specialized_workflow_boundaries(self):
+        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "仅在用户明确要求使用 Lumenverba",
+            "编辑目标、风格参考或构图参考",
+            "只改变用户指定的部分",
+            "主体、场景、风格、构图、光线、准确文字和限制",
+            "不得自动再次生成",
+            "透明背景、抠图或 Alpha 通道验证",
+            "原生 Image-Gen",
+            "指定文字、参考图编辑或明确视觉约束",
+            "多个不同素材",
+            "逐项确认和生成",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, content)
     def test_skill_documents_secure_first_use_and_all_modes(self):
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         for expected in (
