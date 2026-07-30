@@ -195,8 +195,9 @@ class PackagedSkillTests(unittest.TestCase):
 
         for expected in (
             "https://api.lumenverba.cc/v1",
-            'npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.0/skills/lumenverba-image" -g -y',
-            "/tree/v1.0.0/skills/lumenverba-image",
+            'npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.1/skills/lumenverba-image" -g -y',
+            "当前最新稳定版 v1.0.1",
+            "/tree/v1.0.1/skills/lumenverba-image",
             "发布门禁",
             "默认测试",
             "PR 不联网",

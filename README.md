@@ -11,7 +11,7 @@
 新建一个 Codex 对话，直接发送以下内容即可，无需打开终端：
 
 ```text
-请从 https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.0/skills/lumenverba-image 安装 lumenverba-image 技能。
+请从 https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.1/skills/lumenverba-image 安装 lumenverba-image 技能（当前最新稳定版 v1.0.1）。
 ```
 
 安装完成后，完全退出并重新打开 Codex。
@@ -19,10 +19,10 @@
 ### 使用命令安装
 
 ```powershell
-npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.0/skills/lumenverba-image" -g -y
+npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.1/skills/lumenverba-image" -g -y
 ```
 
-安装完成后，重新打开 Codex。技能会在文生图、参考图生图、海报、角色图、插画或包含指定清晰文字的图片请求中自动启用。
+当前最新稳定版为 `v1.0.1`。安装命令固定到发布标签；更新时请改用新的发布标签 URL，而不要继续使用旧版本链接。安装完成后，重新打开 Codex。技能会在文生图、参考图生图、海报、角色图、插画或包含指定清晰文字的图片请求中自动启用。
 
 ## 联网授权
 
