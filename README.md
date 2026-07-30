@@ -11,7 +11,7 @@
 新建一个 Codex 对话，直接发送以下内容即可，无需打开终端：
 
 ```text
-请从 https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.1/skills/lumenverba-image 安装 lumenverba-image 技能（当前最新稳定版 v1.0.1）。
+请从 https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.2/skills/lumenverba-image 安装 lumenverba-image 技能（当前最新稳定版 v1.0.2）。
 ```
 
 安装完成后，完全退出并重新打开 Codex。
@@ -19,14 +19,16 @@
 ### 使用命令安装
 
 ```powershell
-npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.1/skills/lumenverba-image" -g -y
+npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.2/skills/lumenverba-image" -g -y
 ```
 
-当前最新稳定版为 `v1.0.1`。安装命令固定到发布标签；更新时请改用新的发布标签 URL，而不要继续使用旧版本链接。安装完成后，重新打开 Codex。技能会在文生图、参考图生图、海报、角色图、插画或包含指定清晰文字的图片请求中自动启用。
+当前最新稳定版为 `v1.0.2`。安装命令固定到发布标签；更新时请改用新的发布标签 URL，而不要继续使用旧版本链接。安装完成后，重新打开 Codex。技能会在文生图、参考图生图、海报、角色图、插画或包含指定清晰文字的图片请求中自动启用。
 
 ## 联网授权
 
 生成图片需要连接 Lumenverba API。首次生图时，Codex 可能会请求联网权限，请在弹出的提示中允许该请求。
+
+若脚本提示“生成状态未知”，请直接回复“允许联网”，然后重新发送该请求。技能不会自动重试，以避免重复生成。
 
 若出现 `WinError 10013`，表示当前 Codex 会话的网络策略拦截了请求，图片尚未提交到 Lumenverba。请在允许联网的 Codex 会话中重新发送原请求；无需重新创建或粘贴 API 密钥。
 

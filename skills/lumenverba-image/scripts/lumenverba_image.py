@@ -8,6 +8,8 @@ import json
 import mimetypes
 import os
 import secrets
+import socket
+import ssl
 import sys
 import time
 import urllib.error
@@ -94,6 +96,27 @@ def _headers(settings: Settings) -> dict[str, str]:
     }
 
 
+def _network_error_category(reason: object) -> str:
+    if isinstance(reason, socket.gaierror):
+        return "DNS 解析失败"
+    if isinstance(reason, ssl.SSLError):
+        return "TLS 连接失败"
+    if isinstance(reason, ConnectionRefusedError):
+        return "连接被拒绝"
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return "网络连接超时"
+
+    text = str(reason).lower()
+    if "proxy" in text:
+        return "代理连接失败"
+    if "tls" in text or "ssl" in text:
+        return "TLS 连接失败"
+    if "refused" in text:
+        return "连接被拒绝"
+    if "timeout" in text or "timed out" in text:
+        return "网络连接超时"
+    return "网络连接失败"
+
 def _send(method: str, url: str, headers: dict[str, str], body: bytes = b"") -> tuple[int, dict[str, str], bytes]:
     request = urllib.request.Request(url=url, data=body, headers=headers, method=method)
     try:
@@ -102,7 +125,8 @@ def _send(method: str, url: str, headers: dict[str, str], body: bytes = b"") -> 
     except urllib.error.HTTPError as error:
         return error.code, dict(error.headers.items()), error.read(MAX_IMAGE_BYTES + 1)
     except urllib.error.URLError as error:
-        raise RuntimeError("调用图像服务失败，生成状态未知，请勿自动重试。") from error
+        category = _network_error_category(error.reason)
+        raise RuntimeError(f"调用图像服务时发生{category}，生成状态未知，请勿自动重试。请回复“允许联网”，然后重新发送该请求。") from error
 
 
 def _extract_image(payload: object) -> dict[str, object] | None:

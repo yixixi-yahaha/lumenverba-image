@@ -73,15 +73,24 @@ class PortableClientTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "未设置 LUMENVERBA_API_KEY"):
                 client.Settings.from_environment()
 
-    def test_network_error_reports_unknown_generation_state_without_retrying(self):
+    def test_network_error_reports_a_safe_category_and_network_recovery(self):
         client = load_public_client()
 
         with patch.object(client.urllib.request, "urlopen", side_effect=client.urllib.error.URLError("TLS EOF")) as urlopen:
-            with self.assertRaisesRegex(RuntimeError, "生成状态未知"):
+            with self.assertRaisesRegex(RuntimeError, "TLS 连接失败.*生成状态未知.*回复“允许联网”.*重新发送该请求"):
                 client._send("POST", "https://api.lumenverba.cc/v1/images/generations", {})
 
         urlopen.assert_called_once()
 
+    def test_network_error_categories_do_not_expose_raw_error_text(self):
+        client = load_public_client()
+
+        self.assertEqual(client._network_error_category(client.socket.gaierror(-2, "secret-dns-host")), "DNS 解析失败")
+        self.assertEqual(client._network_error_category(client.ssl.SSLError("private TLS detail")), "TLS 连接失败")
+        self.assertEqual(client._network_error_category(ConnectionRefusedError("private endpoint")), "连接被拒绝")
+        self.assertEqual(client._network_error_category(TimeoutError("private timeout")), "网络连接超时")
+        self.assertEqual(client._network_error_category("proxy credentials unavailable"), "代理连接失败")
+        self.assertEqual(client._network_error_category("internal host message"), "网络连接失败")
     def test_text_prompt_requires_verbatim_readable_text(self):
         client = load_public_client()
 
@@ -195,9 +204,10 @@ class PackagedSkillTests(unittest.TestCase):
 
         for expected in (
             "https://api.lumenverba.cc/v1",
-            'npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.1/skills/lumenverba-image" -g -y',
-            "当前最新稳定版 v1.0.1",
-            "/tree/v1.0.1/skills/lumenverba-image",
+            'npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.2/skills/lumenverba-image" -g -y',
+            "回复“允许联网”",
+            "当前最新稳定版 v1.0.2",
+            "/tree/v1.0.2/skills/lumenverba-image",
             "发布门禁",
             "默认测试",
             "PR 不联网",
@@ -214,6 +224,7 @@ class PackagedSkillTests(unittest.TestCase):
             "load_workspace_dependencies",
             "生成状态未知",
             "不自动重试",
+            "回复“允许联网”",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, content)
