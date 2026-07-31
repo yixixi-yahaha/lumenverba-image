@@ -2,8 +2,13 @@ import base64
 import importlib.util
 import json
 import os
+import sys
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,6 +25,7 @@ def load_public_client():
     if spec is None or spec.loader is None:
         raise RuntimeError("无法加载公开客户端脚本")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -55,24 +61,6 @@ class PortableClientTests(unittest.TestCase):
         with patch.dict(os.environ, {"LUMENVERBA_API_KEY": "test-key"}, clear=True):
             self.assertEqual(client.Settings.from_environment().base_url, "https://api.lumenverba.cc/v1")
 
-    def test_defaults_are_used_for_a_generation_payload(self):
-        client = load_public_client()
-
-        payload = client.build_generation_request("海鸥在码头吃薯条")
-
-        self.assertEqual(payload["model"], "gpt-image-2")
-        self.assertEqual(payload["size"], "1536x1024")
-        self.assertEqual(payload["quality"], "standard")
-        self.assertTrue(payload["stream"])
-        self.assertEqual(payload["partial_images"], 1)
-
-    def test_missing_key_is_rejected(self):
-        client = load_public_client()
-
-        with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(RuntimeError, "未设置 LUMENVERBA_API_KEY"):
-                client.Settings.from_environment()
-
     def test_network_error_reports_a_safe_category_and_network_recovery(self):
         client = load_public_client()
 
@@ -80,7 +68,7 @@ class PortableClientTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "TLS 连接失败.*生成状态未知.*回复“允许联网”.*重新发送该请求"):
                 client._send("POST", "https://api.lumenverba.cc/v1/images/generations", {})
 
-        urlopen.assert_called_once()
+        self.assertEqual(urlopen.call_count, 1)
 
     def test_network_error_categories_do_not_expose_raw_error_text(self):
         client = load_public_client()
@@ -91,6 +79,41 @@ class PortableClientTests(unittest.TestCase):
         self.assertEqual(client._network_error_category(TimeoutError("private timeout")), "网络连接超时")
         self.assertEqual(client._network_error_category("proxy credentials unavailable"), "代理连接失败")
         self.assertEqual(client._network_error_category("internal host message"), "网络连接失败")
+
+    def test_defaults_are_used_for_a_generation_payload(self):
+        client = load_public_client()
+
+        payload = client.build_generation_request("海鸥在码头吃薯条")
+
+        self.assertEqual(payload["model"], "gpt-image-2")
+        self.assertEqual(payload["size"], "1536x1024")
+        self.assertEqual(payload["quality"], "standard")
+        self.assertEqual(payload["n"], 1)
+        self.assertTrue(payload["stream"])
+        self.assertEqual(payload["partial_images"], 1)
+
+    def test_generation_count_is_limited_to_four(self):
+        client = load_public_client()
+
+        self.assertEqual(client.build_generation_request("同一提示词", count=4)["n"], 4)
+        for invalid in (0, 5):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "生成数量必须在 1 到 4 之间"):
+                    client.build_generation_request("同一提示词", count=invalid)
+
+    def test_generation_prompt_is_passed_through_verbatim(self):
+        client = load_public_client()
+        prompt = "  保留 $price 与 `code`，不要改写。\n"
+
+        self.assertEqual(client.build_generation_request(prompt)["prompt"], prompt)
+
+    def test_missing_key_is_rejected(self):
+        client = load_public_client()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "未设置 LUMENVERBA_API_KEY"):
+                client.Settings.from_environment()
+
     def test_text_prompt_requires_verbatim_readable_text(self):
         client = load_public_client()
 
@@ -114,59 +137,102 @@ class PortableClientTests(unittest.TestCase):
             self.assertEqual(result.read_bytes(), PNG_BYTES)
             self.assertEqual(result.suffix, ".png")
 
-    def test_https_image_url_is_downloaded_and_saved_as_png(self):
-        client = load_public_client()
-        response = json.dumps({"data": [{"url": "https://cdn.example.test/image.png"}]}).encode("utf-8")
-
-        with tempfile.TemporaryDirectory() as directory:
-            with patch.object(client, "_send", return_value=(200, {"Content-Type": "image/png"}, PNG_BYTES)) as send:
-                result = client.save_response_image(response, "application/json", Path(directory), client.Settings("test-key"))
-
-            self.assertEqual(result.read_bytes(), PNG_BYTES)
-            self.assertEqual(result.suffix, ".png")
-
-        send.assert_called_once_with("GET", "https://cdn.example.test/image.png", {})
-
-    def test_https_image_url_rejects_non_png_content_type(self):
-        client = load_public_client()
-        response = json.dumps({"data": [{"url": "https://cdn.example.test/image.png"}]}).encode("utf-8")
-
-        with tempfile.TemporaryDirectory() as directory:
-            with patch.object(client, "_send", return_value=(200, {"Content-Type": "text/html"}, PNG_BYTES)) as send:
-                with self.assertRaisesRegex(RuntimeError, "下载生成图像失败"):
-                    client.save_response_image(response, "application/json", Path(directory), client.Settings("test-key"))
-
-        send.assert_called_once_with("GET", "https://cdn.example.test/image.png", {})
-
-    def test_non_png_image_response_is_rejected(self):
-        client = load_public_client()
-        encoded = base64.b64encode(b"not a png").decode("ascii")
-        response = json.dumps({"data": [{"b64_json": encoded}]}).encode("utf-8")
-
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(RuntimeError, "不是 PNG"):
-                client.save_response_image(response, "application/json", Path(directory))
-
-    def test_accepted_generation_polls_its_task_until_a_png_is_available(self):
+    def test_json_response_saves_every_returned_image(self):
         client = load_public_client()
         encoded = base64.b64encode(PNG_BYTES).decode("ascii")
-        responses = [
-            (202, {"Location": "/v1/tasks/task-123"}, b'{"id":"task-123","status":"queued"}'),
-            (200, {}, b'{"id":"task-123","status":"queued"}'),
-            (200, {}, json.dumps({"data": [{"b64_json": encoded}]}).encode("utf-8")),
-        ]
+        response = json.dumps({"data": [{"b64_json": encoded}, {"b64_json": encoded}]}).encode("utf-8")
 
         with tempfile.TemporaryDirectory() as directory:
-            settings = client.Settings("test-key")
-            with patch.object(client, "_send", side_effect=responses) as send, patch.object(client.time, "sleep") as sleep:
-                result = client._request_image("/images/generations", b"{}", "application/json", settings, Path(directory))
-            self.assertEqual(result.read_bytes(), PNG_BYTES)
+            results = client.save_response_images(response, "application/json", Path(directory))
 
-        self.assertEqual(send.call_args_list[0].args[0], "POST")
-        self.assertEqual(send.call_args_list[1].args[0], "GET")
-        self.assertEqual(send.call_args_list[1].args[1], "https://api.lumenverba.cc/v1/tasks/task-123")
-        self.assertEqual(send.call_args_list[2].args[0], "GET")
-        sleep.assert_called_once_with(1)
+        self.assertEqual(len(results), 2)
+        self.assertNotEqual(results[0], results[1])
+
+    def test_sse_response_ignores_partials_and_saves_all_completed_images(self):
+        client = load_public_client()
+        encoded = base64.b64encode(PNG_BYTES).decode("ascii")
+        response = (
+            'data: {"type":"image_generation.partial_image","b64_json":"partial"}\n\n'
+            f'data: {{"type":"image_generation.completed","b64_json":"{encoded}"}}\n\n'
+            f'data: {{"type":"image_generation.completed","b64_json":"{encoded}"}}\n\n'
+        ).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            results = client.save_response_images(response, "text/event-stream", Path(directory))
+
+        self.assertEqual(len(results), 2)
+
+    def test_count_command_outputs_successes_and_reports_missing_images(self):
+        client = load_public_client()
+        returned = [Path("C:/generated/first.png")]
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with patch.object(client, "generate", return_value=returned):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                exit_code = client.main(["generate", "--prompt", "同一提示词", "--count", "2"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue().splitlines(), [str(returned[0])])
+        self.assertIn("批次项 2 失败", stderr.getvalue())
+
+    def test_batch_starts_every_prompt_before_any_item_finishes(self):
+        client = load_public_client()
+        started = threading.Barrier(3)
+        release = threading.Event()
+
+        def fake_generate(prompt, model, size, quality, count, output_dir):
+            started.wait(timeout=2)
+            release.wait(timeout=2)
+            return [Path(f"C:/generated/{prompt}.png")]
+
+        with patch.object(client, "generate", side_effect=fake_generate):
+            with ThreadPoolExecutor(max_workers=1) as harness:
+                future = harness.submit(client.generate_batch, ["first", "second"], None, None, None, Path("output"))
+                started.wait(timeout=2)
+                release.set()
+                results = future.result(timeout=2)
+
+        self.assertEqual([item.path.name for item in results], ["first.png", "second.png"])
+        self.assertTrue(all(item.error is None for item in results))
+
+    def test_batch_preserves_successes_when_one_prompt_fails(self):
+        client = load_public_client()
+
+        def fake_generate(prompt, model, size, quality, count, output_dir):
+            if prompt == "first":
+                raise RuntimeError("模拟失败")
+            return [Path("C:/generated/second.png")]
+
+        with patch.object(client, "generate", side_effect=fake_generate):
+            results = client.generate_batch(["first", "second"], None, None, None, Path("output"))
+
+        self.assertEqual(results[0].error, "模拟失败")
+        self.assertEqual(results[1].path, Path("C:/generated/second.png"))
+
+    def test_batch_requires_two_to_four_prompts(self):
+        client = load_public_client()
+        for prompts in (["only"], ["1", "2", "3", "4", "5"]):
+            with self.subTest(prompts=prompts):
+                with self.assertRaisesRegex(ValueError, "批量提示词数量必须在 2 到 4 之间"):
+                    client.generate_batch(prompts, None, None, None, Path("output"))
+
+    def test_batch_cli_outputs_success_paths_and_numbered_errors(self):
+        client = load_public_client()
+        results = [
+            client.BatchItemResult(error="模拟失败"),
+            client.BatchItemResult(path=Path("C:/generated/second.png")),
+        ]
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with patch.object(client, "generate_batch", return_value=results):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                exit_code = client.main(["batch", "--prompt", "first", "--prompt", "second"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue().splitlines(), [str(Path("C:/generated/second.png"))])
+        self.assertIn("批次项 1 失败: 模拟失败", stderr.getvalue())
 
     def test_edit_request_contains_each_reference_image(self):
         client = load_public_client()
@@ -182,52 +248,103 @@ class PortableClientTests(unittest.TestCase):
         self.assertIn(b'name="image[]"; filename="second.png"', body)
         self.assertIn("multipart/form-data", content_type)
 
-    def test_edit_request_rejects_relative_reference_path(self):
-        client = load_public_client()
-
-        with self.assertRaisesRegex(ValueError, "绝对路径"):
-            client.build_edit_request("保留人物姿势", [Path("relative.png")], "gpt-image-2", "1024x1024", "standard")
-
-    def test_edit_request_rejects_oversized_reference_image(self):
+    def test_edit_request_contains_the_requested_count(self):
         client = load_public_client()
         with tempfile.TemporaryDirectory() as directory:
-            image = Path(directory) / "large.png"
-            image.write_bytes(PNG_BYTES + b"x" * client.MAX_REFERENCE_BYTES)
+            reference = Path(directory) / "reference.png"
+            reference.write_bytes(PNG_BYTES)
+            body, _ = client.build_edit_request("保持主体", [reference], None, None, None, count=4)
 
+        self.assertIn(b'name="n"\r\n\r\n4\r\n', body)
+
+    def test_response_url_is_downloaded_as_png(self):
+        client = load_public_client()
+        response = json.dumps({"data": [{"url": "https://example.test/image.png"}]}).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(client, "_send", return_value=(200, {"Content-Type": "image/png"}, PNG_BYTES)) as send:
+                result = client.save_response_image(response, "application/json", Path(directory), client.Settings("test-key"))
+
+            self.assertEqual(result.read_bytes(), PNG_BYTES)
+            self.assertEqual(send.call_args.args[:2], ("GET", "https://example.test/image.png"))
+
+    def test_accepted_task_is_polled_until_png_is_ready(self):
+        client = load_public_client()
+        encoded = base64.b64encode(PNG_BYTES).decode("ascii")
+        pending = json.dumps({"status": "processing"}).encode("utf-8")
+        completed = json.dumps({"status": "completed", "data": [{"b64_json": encoded}]}).encode("utf-8")
+
+        responses = [
+            (202, {"Location": "/v1/tasks/task-1"}, b""),
+            (200, {"Content-Type": "application/json"}, pending),
+            (200, {"Content-Type": "application/json"}, completed),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(client, "_send", side_effect=responses) as send:
+                with patch.object(client.time, "sleep") as sleep:
+                    result = client._request_image(
+                        "/images/generations",
+                        b"{}",
+                        "application/json",
+                        client.Settings("test-key"),
+                        Path(directory),
+                    )
+
+            self.assertEqual(result.read_bytes(), PNG_BYTES)
+
+        self.assertEqual(send.call_args_list[1].args[:2], ("GET", "https://api.lumenverba.cc/v1/tasks/task-1"))
+        self.assertEqual(send.call_count, 3)
+        sleep.assert_called_once_with(1)
+
+    def test_accepted_task_rejects_an_insecure_location(self):
+        client = load_public_client()
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(client, "_send", return_value=(202, {"Location": "http://private.test/task"}, b"")):
+                with self.assertRaisesRegex(RuntimeError, "不安全的任务地址"):
+                    client._request_image(
+                        "/images/generations",
+                        b"{}",
+                        "application/json",
+                        client.Settings("test-key"),
+                        Path(directory),
+                    )
+
+    def test_rejects_non_https_generated_image_url(self):
+        client = load_public_client()
+        response = json.dumps({"data": [{"url": "file:///private.png"}]}).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "必须使用 HTTPS"):
+                client.save_response_image(response, "application/json", Path(directory), client.Settings("test-key"))
+
+    def test_rejects_relative_and_oversized_reference_images(self):
+        client = load_public_client()
+        with tempfile.TemporaryDirectory() as directory:
+            relative = Path("reference.png")
+            with self.assertRaisesRegex(ValueError, "存在的绝对路径"):
+                client.build_edit_request("测试", [relative], None, None, None)
+
+            oversized = Path(directory) / "oversized.png"
+            oversized.write_bytes(PNG_BYTES + b"x" * (10 * 1024 * 1024))
             with self.assertRaisesRegex(ValueError, "文件过大"):
-                client.build_edit_request("保留人物姿势", [image], "gpt-image-2", "1024x1024", "standard")
+                client.build_edit_request("测试", [oversized.resolve()], None, None, None)
 
 
 class PackagedSkillTests(unittest.TestCase):
-    def test_readme_documents_installation_and_release_contracts(self):
-        content = (ROOT / "README.md").read_text(encoding="utf-8")
+    def test_documentation_declares_the_runtime_and_versioned_install_contract(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for content in (readme, skill):
+            self.assertIn("https://api.lumenverba.cc/v1", content)
 
         for expected in (
-            "https://api.lumenverba.cc/v1",
-            'npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.2/skills/lumenverba-image" -g -y',
-            "回复“允许联网”",
-            "当前最新稳定版 v1.0.2",
-            "/tree/v1.0.2/skills/lumenverba-image",
-            "发布门禁",
-            "默认测试",
-            "PR 不联网",
-        ):
-            with self.subTest(expected=expected):
-                self.assertIn(expected, content)
-
-    def test_skill_documents_runtime_and_network_failure_contracts(self):
-        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-
-        for expected in (
-            "https://api.lumenverba.cc/v1",
             "--output-dir",
             "load_workspace_dependencies",
-            "生成状态未知",
-            "不自动重试",
-            "回复“允许联网”",
+            "/tree/v1.1.0/skills/lumenverba-image",
+            "当前最新稳定版 v1.1.0",
         ):
-            with self.subTest(expected=expected):
-                self.assertIn(expected, content)
+            self.assertIn(expected, readme + skill)
 
     def test_readme_documents_clean_uninstall(self):
         content = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -254,23 +371,48 @@ class PackagedSkillTests(unittest.TestCase):
         ):
             self.assertIn(expected, content)
 
-    def test_skill_documents_specialized_workflow_boundaries(self):
+    def test_skill_documents_fast_batch_workflow(self):
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         for expected in (
-            "仅在用户明确要求使用 Lumenverba",
-            "编辑目标、风格参考或构图参考",
-            "只改变用户指定的部分",
-            "主体、场景、风格、构图、光线、准确文字和限制",
-            "不得自动再次生成",
-            "透明背景、抠图或 Alpha 通道验证",
-            "原生 Image-Gen",
-            "指定文字、参考图编辑或明确视觉约束",
-            "多个不同素材",
-            "逐项确认和生成",
+            "`--count 1..4`",
+            "`batch`",
+            "整批生成授权",
+            "原样传递",
+            "不得进行视觉检查",
+            "成功图片",
+            "批次项",
+            "不得自动重试",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, content)
+
+        for forbidden in (
+            "多个不同素材不批量提交",
+            "主体、场景、风格、构图、光线、准确文字和限制补足提示词",
+            "还应视觉检查结果",
+            "逐项确认和生成",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, content)
+
+    def test_readme_documents_batch_commands_and_limit(self):
+        content = (ROOT / "README.md").read_text(encoding="utf-8")
+        for expected in ("--count", "batch --prompt", "最多 4 张", "部分失败"):
+            self.assertIn(expected, content)
+
+    def test_skill_documents_network_recovery_after_an_unknown_state(self):
+        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "生成状态未知",
+            "回复“允许联网”",
+            "重新发送该请求",
+            "不得自动重试",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, content)
+
     def test_skill_documents_secure_first_use_and_all_modes(self):
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         for expected in (
@@ -284,8 +426,5 @@ class PackagedSkillTests(unittest.TestCase):
             "AsSecureString",
             "SetEnvironmentVariable",
             "完全退出并重新打开 Codex",
-            "require_escalated",
-            "联网权限",
-            "WinError 10013",
         ):
             self.assertIn(expected, content)

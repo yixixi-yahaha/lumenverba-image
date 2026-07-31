@@ -15,6 +15,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -27,6 +29,8 @@ ALLOWED_SIZES = {"1024x1024", "1536x1024", "1024x1536"}
 ALLOWED_QUALITIES = {"low", "standard", "high"}
 MAX_REFERENCE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_BATCH_SIZE = 4
+MAX_RESPONSE_BYTES = MAX_IMAGE_BYTES * MAX_BATCH_SIZE * 4 // 3 + 64 * 1024
 TIMEOUT_SECONDS = 600
 MAX_TASK_POLL_ATTEMPTS = 60
 TASK_POLL_INTERVAL_SECONDS = 1
@@ -45,6 +49,12 @@ class Settings:
         return cls(api_key)
 
 
+@dataclass(frozen=True)
+class BatchItemResult:
+    path: Path | None = None
+    error: str | None = None
+
+
 def _select(value: str | None, allowed: set[str], default: str, label: str) -> str:
     selected = value or default
     if selected not in allowed:
@@ -52,19 +62,27 @@ def _select(value: str | None, allowed: set[str], default: str, label: str) -> s
     return selected
 
 
+def _select_count(count: int) -> int:
+    if not 1 <= count <= MAX_BATCH_SIZE:
+        raise ValueError("生成数量必须在 1 到 4 之间。")
+    return count
+
+
 def build_generation_request(
     prompt: str,
     model: str | None = None,
     size: str | None = None,
     quality: str | None = None,
+    count: int = 1,
 ) -> dict[str, object]:
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("提示词不能为空。")
     return {
         "model": _select(model, ALLOWED_MODELS, DEFAULT_MODEL, "模型"),
-        "prompt": prompt.strip(),
+        "prompt": prompt,
         "size": _select(size, ALLOWED_SIZES, DEFAULT_SIZE, "尺寸"),
         "quality": _select(quality, ALLOWED_QUALITIES, DEFAULT_QUALITY, "质量"),
+        "n": _select_count(count),
         "stream": True,
         "partial_images": 1,
     }
@@ -117,37 +135,37 @@ def _network_error_category(reason: object) -> str:
         return "网络连接超时"
     return "网络连接失败"
 
+
 def _send(method: str, url: str, headers: dict[str, str], body: bytes = b"") -> tuple[int, dict[str, str], bytes]:
     request = urllib.request.Request(url=url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-            return response.status, dict(response.headers.items()), response.read(MAX_IMAGE_BYTES + 1)
+            return response.status, dict(response.headers.items()), response.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as error:
-        return error.code, dict(error.headers.items()), error.read(MAX_IMAGE_BYTES + 1)
+        return error.code, dict(error.headers.items()), error.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.URLError as error:
         category = _network_error_category(error.reason)
         raise RuntimeError(f"调用图像服务时发生{category}，生成状态未知，请勿自动重试。请回复“允许联网”，然后重新发送该请求。") from error
 
 
-def _extract_image(payload: object) -> dict[str, object] | None:
+def _extract_images(payload: object) -> list[dict[str, object]]:
+    if isinstance(payload, list):
+        images: list[dict[str, object]] = []
+        for item in payload:
+            images.extend(_extract_images(item))
+        return images
     if not isinstance(payload, dict):
-        return None
+        return []
     if isinstance(payload.get("b64_json"), str) or isinstance(payload.get("url"), str):
-        return payload
-    data = payload.get("data")
-    if isinstance(data, list):
-        for item in data:
-            image = _extract_image(item)
-            if image:
-                return image
+        return [payload]
+    images = _extract_images(payload.get("data"))
     for key in ("image", "result", "output"):
-        image = _extract_image(payload.get(key))
-        if image:
-            return image
-    return None
+        images.extend(_extract_images(payload.get(key)))
+    return images
 
 
-def _decode_sse(body: bytes) -> dict[str, object]:
+def _decode_sse(body: bytes) -> list[dict[str, object]]:
+    images: list[dict[str, object]] = []
     for event in body.decode("utf-8").replace("\r\n", "\n").split("\n\n"):
         data = "\n".join(line[5:].lstrip() for line in event.splitlines() if line.startswith("data:"))
         if not data or data == "[DONE]":
@@ -157,22 +175,23 @@ def _decode_sse(body: bytes) -> dict[str, object]:
         except json.JSONDecodeError:
             continue
         event_type = str(payload.get("type", "")).lower() if isinstance(payload, dict) else ""
-        image = _extract_image(payload)
-        if image and "partial" not in event_type:
-            return image
-    raise RuntimeError("图像服务的流式响应中没有最终图像。")
+        if "partial" not in event_type:
+            images.extend(_extract_images(payload))
+    if not images:
+        raise RuntimeError("图像服务的流式响应中没有最终图像。")
+    return images
 
 
-def _decode_image(body: bytes, content_type: str) -> dict[str, object]:
+def _decode_images(body: bytes, content_type: str) -> list[dict[str, object]]:
     if content_type.lower().startswith("text/event-stream"):
         return _decode_sse(body)
     try:
-        image = _extract_image(json.loads(body.decode("utf-8")))
+        images = _extract_images(json.loads(body.decode("utf-8")))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise RuntimeError("图像服务响应无法解析。") from error
-    if not image:
+    if not images:
         raise RuntimeError("图像服务响应中没有可保存的图像。")
-    return image
+    return images
 
 
 def _save_png(image_bytes: bytes, output_dir: Path) -> Path:
@@ -186,8 +205,7 @@ def _save_png(image_bytes: bytes, output_dir: Path) -> Path:
     return path.resolve()
 
 
-def save_response_image(body: bytes, content_type: str, output_dir: Path, settings: Settings | None = None) -> Path:
-    image = _decode_image(body, content_type)
+def _save_response_item(image: dict[str, object], output_dir: Path, settings: Settings | None) -> Path:
     encoded = image.get("b64_json")
     if isinstance(encoded, str):
         try:
@@ -204,6 +222,19 @@ def save_response_image(body: bytes, content_type: str, output_dir: Path, settin
     if not 200 <= status < 300 or not headers.get("Content-Type", "").lower().startswith("image/png"):
         raise RuntimeError("下载生成图像失败。")
     return _save_png(image_bytes, output_dir)
+
+
+def save_response_images(
+    body: bytes,
+    content_type: str,
+    output_dir: Path,
+    settings: Settings | None = None,
+) -> list[Path]:
+    return [_save_response_item(image, output_dir, settings) for image in _decode_images(body, content_type)]
+
+
+def save_response_image(body: bytes, content_type: str, output_dir: Path, settings: Settings | None = None) -> Path:
+    return save_response_images(body, content_type, output_dir, settings)[0]
 
 
 def _task_location(headers: dict[str, str], settings: Settings) -> str:
@@ -224,16 +255,15 @@ def _task_status(body: bytes) -> str:
         return ""
     if not isinstance(payload, dict):
         return ""
-    status = payload.get("status")
-    if isinstance(status, str):
-        return status.lower()
+    if isinstance(payload.get("status"), str):
+        return payload["status"].lower()
     data = payload.get("data")
     if isinstance(data, dict) and isinstance(data.get("status"), str):
         return data["status"].lower()
     return ""
 
 
-def _wait_for_task(task_url: str, settings: Settings, output_dir: Path) -> Path:
+def _wait_for_task(task_url: str, settings: Settings, output_dir: Path) -> list[Path]:
     pending_statuses = {"queued", "pending", "processing", "running", "in_progress"}
     failed_statuses = {"failure", "failed", "error", "cancelled"}
     for attempt in range(MAX_TASK_POLL_ATTEMPTS):
@@ -241,7 +271,7 @@ def _wait_for_task(task_url: str, settings: Settings, output_dir: Path) -> Path:
         if not 200 <= status < 300:
             raise RuntimeError(f"图像任务查询返回 HTTP {status}。")
         try:
-            return save_response_image(response, headers.get("Content-Type", ""), output_dir, settings)
+            return save_response_images(response, headers.get("Content-Type", ""), output_dir, settings)
         except RuntimeError as error:
             task_status = _task_status(response)
             if task_status in failed_statuses:
@@ -258,8 +288,15 @@ def _is_supported_image(path: Path) -> bool:
     return signature.startswith(b"\x89PNG\r\n\x1a\n") or signature.startswith(b"\xff\xd8\xff") or signature.startswith((b"GIF87a", b"GIF89a")) or (signature.startswith(b"RIFF") and signature[8:12] == b"WEBP")
 
 
-def build_edit_request(prompt: str, references: list[Path], model: str | None, size: str | None, quality: str | None) -> tuple[bytes, str]:
-    payload = build_generation_request(prompt, model, size, quality)
+def build_edit_request(
+    prompt: str,
+    references: list[Path],
+    model: str | None,
+    size: str | None,
+    quality: str | None,
+    count: int = 1,
+) -> tuple[bytes, str]:
+    payload = build_generation_request(prompt, model, size, quality, count)
     payload.pop("stream")
     payload.pop("partial_images")
     if not references:
@@ -279,25 +316,55 @@ def build_edit_request(prompt: str, references: list[Path], model: str | None, s
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
 
 
-def _request_image(endpoint: str, body: bytes, content_type: str, settings: Settings, output_dir: Path) -> Path:
+def _request_images(endpoint: str, body: bytes, content_type: str, settings: Settings, output_dir: Path) -> list[Path]:
     status, headers, response = _send("POST", f"{settings.base_url}{endpoint}", {**_headers(settings), "Content-Type": content_type}, body)
     if not 200 <= status < 300:
         raise RuntimeError(f"图像服务返回 HTTP {status}。")
     if status == 202:
         return _wait_for_task(_task_location(headers, settings), settings, output_dir)
-    return save_response_image(response, headers.get("Content-Type", ""), output_dir, settings)
+    return save_response_images(response, headers.get("Content-Type", ""), output_dir, settings)
 
 
-def generate(prompt: str, model: str | None, size: str | None, quality: str | None, output_dir: Path) -> Path:
+def _request_image(endpoint: str, body: bytes, content_type: str, settings: Settings, output_dir: Path) -> Path:
+    return _request_images(endpoint, body, content_type, settings, output_dir)[0]
+
+
+def generate(prompt: str, model: str | None, size: str | None, quality: str | None, count: int, output_dir: Path) -> list[Path]:
     settings = Settings.from_environment()
-    payload = build_generation_request(prompt, model, size, quality)
-    return _request_image("/images/generations", json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json", settings, output_dir)
+    payload = build_generation_request(prompt, model, size, quality, count)
+    return _request_images("/images/generations", json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json", settings, output_dir)
 
 
-def edit(prompt: str, references: list[Path], model: str | None, size: str | None, quality: str | None, output_dir: Path) -> Path:
+def edit(prompt: str, references: list[Path], model: str | None, size: str | None, quality: str | None, count: int, output_dir: Path) -> list[Path]:
     settings = Settings.from_environment()
-    body, content_type = build_edit_request(prompt, references, model, size, quality)
-    return _request_image("/images/edits", body, content_type, settings, output_dir)
+    body, content_type = build_edit_request(prompt, references, model, size, quality, count)
+    return _request_images("/images/edits", body, content_type, settings, output_dir)
+
+
+def generate_batch(
+    prompts: list[str],
+    model: str | None,
+    size: str | None,
+    quality: str | None,
+    output_dir: Path,
+) -> list[BatchItemResult]:
+    if not 2 <= len(prompts) <= MAX_BATCH_SIZE:
+        raise ValueError("批量提示词数量必须在 2 到 4 之间。")
+    if any(not isinstance(prompt, str) or not prompt.strip() for prompt in prompts):
+        raise ValueError("批量提示词不能为空。")
+
+    def run(prompt: str) -> BatchItemResult:
+        try:
+            paths = generate(prompt, model, size, quality, 1, output_dir)
+            if not paths:
+                return BatchItemResult(error="图像服务未返回图片。")
+            return BatchItemResult(path=paths[0])
+        except (OSError, RuntimeError, ValueError) as error:
+            return BatchItemResult(error=str(error))
+
+    with ThreadPoolExecutor(max_workers=len(prompts)) as executor:
+        futures = [executor.submit(run, prompt) for prompt in prompts]
+        return [future.result() for future in futures]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -309,6 +376,7 @@ def _parser() -> argparse.ArgumentParser:
         current.add_argument("--size", choices=sorted(ALLOWED_SIZES))
         current.add_argument("--quality", choices=sorted(ALLOWED_QUALITIES))
         current.add_argument("--output-dir", type=Path, default=Path.cwd() / "output")
+        current.add_argument("--count", type=int, choices=range(1, MAX_BATCH_SIZE + 1), default=1)
     subcommands.choices["generate"].add_argument("--prompt", required=True)
     subcommands.choices["edit"].add_argument("--prompt", required=True)
     subcommands.choices["edit"].add_argument("--reference", type=Path, action="append", required=True)
@@ -317,24 +385,53 @@ def _parser() -> argparse.ArgumentParser:
     subcommands.choices["text"].add_argument("--language")
     subcommands.choices["text"].add_argument("--position")
     subcommands.choices["text"].add_argument("--style")
+    batch_parser = subcommands.add_parser("batch")
+    batch_parser.add_argument("--model", choices=sorted(ALLOWED_MODELS))
+    batch_parser.add_argument("--size", choices=sorted(ALLOWED_SIZES))
+    batch_parser.add_argument("--quality", choices=sorted(ALLOWED_QUALITIES))
+    batch_parser.add_argument("--output-dir", type=Path, default=Path.cwd() / "output")
+    batch_parser.add_argument("--prompt", action="append", required=True)
     return parser
+
+
+def _print_results(paths: list[Path], expected_count: int) -> int:
+    for path in paths:
+        print(path)
+    if len(paths) == expected_count:
+        return 0
+    for index in range(len(paths) + 1, expected_count + 1):
+        print(f"批次项 {index} 失败: 图像服务未返回该图片。", file=sys.stderr)
+    return 1
+
+
+def _print_batch_results(results: list[BatchItemResult]) -> int:
+    failed = False
+    for index, result in enumerate(results, start=1):
+        if result.path is not None:
+            print(result.path)
+        else:
+            failed = True
+            print(f"批次项 {index} 失败: {result.error or '未知错误'}", file=sys.stderr)
+    return 1 if failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
+        if arguments.command == "batch":
+            results = generate_batch(arguments.prompt, arguments.model, arguments.size, arguments.quality, arguments.output_dir)
+            return _print_batch_results(results)
         if arguments.command == "generate":
-            path = generate(arguments.prompt, arguments.model, arguments.size, arguments.quality, arguments.output_dir)
+            paths = generate(arguments.prompt, arguments.model, arguments.size, arguments.quality, arguments.count, arguments.output_dir)
         elif arguments.command == "edit":
-            path = edit(arguments.prompt, arguments.reference, arguments.model, arguments.size, arguments.quality, arguments.output_dir)
+            paths = edit(arguments.prompt, arguments.reference, arguments.model, arguments.size, arguments.quality, arguments.count, arguments.output_dir)
         else:
             prompt = build_text_prompt(arguments.text, arguments.description, arguments.language, arguments.position, arguments.style)
-            path = generate(prompt, arguments.model, arguments.size, arguments.quality, arguments.output_dir)
+            paths = generate(prompt, arguments.model, arguments.size, arguments.quality, arguments.count, arguments.output_dir)
     except (OSError, RuntimeError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 1
-    print(path)
-    return 0
+    return _print_results(paths, arguments.count)
 
 
 if __name__ == "__main__":

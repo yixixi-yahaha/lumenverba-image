@@ -8,47 +8,21 @@
 
 ### 在 Codex 对话中安装
 
-新建一个 Codex 对话，直接发送以下内容即可，无需打开终端：
+新建一个 Codex 对话，发送以下内容：
 
 ```text
-请从 https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.2/skills/lumenverba-image 安装 lumenverba-image 技能（当前最新稳定版 v1.0.2）。
+请从 https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.1.0/skills/lumenverba-image 安装 lumenverba-image 技能（当前最新稳定版 v1.1.0）。
 ```
-
-安装完成后，完全退出并重新打开 Codex。
 
 ### 使用命令安装
 
 ```powershell
-npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.0.2/skills/lumenverba-image" -g -y
+npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.1.0/skills/lumenverba-image" -g -y
 ```
 
-当前最新稳定版为 `v1.0.2`。安装命令固定到发布标签；更新时请改用新的发布标签 URL，而不要继续使用旧版本链接。安装完成后，重新打开 Codex。技能会在文生图、参考图生图、海报、角色图、插画或包含指定清晰文字的图片请求中自动启用。
-
-## 联网授权
-
-生成图片需要连接 Lumenverba API。首次生图时，Codex 可能会请求联网权限，请在弹出的提示中允许该请求。
-
-若脚本提示“生成状态未知”，请直接回复“允许联网”，然后重新发送该请求。技能不会自动重试，以避免重复生成。
-
-若出现 `WinError 10013`，表示当前 Codex 会话的网络策略拦截了请求，图片尚未提交到 Lumenverba。请在允许联网的 Codex 会话中重新发送原请求；无需重新创建或粘贴 API 密钥。
-
-首次生成前，可在 Codex 对话中直接发送：
-
-```text
-请使用 lumenverba-image 生成图片，并在执行前申请 Lumenverba 所需的联网权限。我会在弹出的授权提示中允许该请求。
-```
-
-若已经出现过 `WinError 10013`，可发送：
-
-```text
-请重新执行刚才的 Lumenverba 生图请求，并在执行前申请联网权限。
-```
-
-出现联网授权提示后选择允许，随后 Codex 会继续执行生图；不要在对话中提供 API 密钥。
+当前最新稳定版为 `v1.1.0`。安装命令固定到发布标签；更新时请改用新的发布标签 URL，而不要继续使用旧版本链接。安装完成后，重新打开 Codex。技能会在文生图、参考图生图、海报、角色图、插画或包含指定清晰文字的图片请求中自动启用。
 
 ## 首次配置密钥
-
-本技能调用的生图模型由 [Lumenverba](https://lumenverba.cc/home) 中转站提供。请先在该站点创建 API 密钥，再完成下方配置。
 
 不要在聊天中发送 API 密钥。在 PowerShell 中粘贴并运行以下代码，输入时内容不会显示：
 
@@ -84,28 +58,6 @@ Remove-Variable keyStillExists
 
 命令应显示 `用户环境变量仍存在: False`。已经运行的 Codex 进程仍可能保留启动时继承的旧值，因此清理后必须完全退出 Codex、结束后台进程并重新打开。干净卸载不会删除此前生成的图片，也不会修改其他环境变量。
 
-## 快速使用
-
-完成安装、配置密钥并重新打开 Codex 后，直接用自然语言提出绘图请求即可。用户明确给出的 `model`、`size`、`quality` 会优先使用；未给出时使用默认值 `gpt-image-2`、`1536x1024`、`standard`。
-
-文生图：
-
-```text
-使用 Lumenverba 绘图生成一幅雨夜广州街头的赛博朋克电影海报，16:9，高质量。
-```
-
-参考图生图：将参考图附到 Codex 对话中，再说明需要保留或改变的内容。
-
-```text
-参考这张图片中的角色，生成一幅末世上海街头的废土朋克海报，Q 版角色，size 为 1024x1536，quality 为 high。
-```
-
-指定文字生图：将需要准确显示的文字用引号标出，并说明画面和文字位置。
-
-```text
-生成一张柠檬汽水促销海报，中央必须清晰、完整、逐字显示“夏日特惠”，使用中文粗体字，quality 为 high。
-```
-
 ## 功能
 
 - 文生图：根据提示词创建图片。
@@ -114,6 +66,17 @@ Remove-Variable keyStillExists
 
 默认使用模型 `gpt-image-2`、尺寸 `1536x1024` 和质量 `standard`。可用模型为 `gpt-image-1`、`gpt-image-1.5`、`gpt-image-2`；可用尺寸为 `1024x1024`、`1536x1024`、`1024x1536`；可用质量为 `low`、`standard`、`high`。用户显式指定的参数始终优先。
 
+## 批量生成
+
+同一提示词可使用 `--count 2` 至 `--count 4` 在一次请求中生成多个版本，单批最多 4 张。多个不同提示词使用 `batch --prompt`，重复传入 2 至 4 个 `--prompt`；脚本会并发执行并按输入顺序输出成功图片路径。
+
+```powershell
+python "skills/lumenverba-image/scripts/lumenverba_image.py" generate --prompt "同一提示词" --count 2
+python "skills/lumenverba-image/scripts/lumenverba_image.py" batch --prompt "第一张" --prompt "第二张"
+```
+
+全部成功时退出码为 `0`。部分失败时已成功图片仍保留并输出，失败批次项写入标准错误，退出码为 `1`。创建请求不会自动重试或切换生成方式。
+
 ## 维护者发布验证
 
-本节仅面向维护者；普通安装用户可跳过。默认测试和 PR 不联网。发布前必须依次完成离线单元测试、CLI 契约测试，以及一次人工无文字 API PNG 冒烟测试。仅当改动涉及文字生成或文字提示词时，才额外人工核验中文文字图的逐字准确与清晰可读性。
+本节仅面向维护者；普通安装用户可跳过。每个发布标签前运行离线单元测试和 CLI 契约测试。真实 API 冒烟测试仅由维护者人工触发，并使用独立低额度测试密钥：每次发布生成一张无文字图片并验证 PNG；只有文字图相关变更才额外生成中文文字图，人工确认文字完整、清晰且没有额外文案。默认测试和 PR 检查不访问 Lumenverba。
