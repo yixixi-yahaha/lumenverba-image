@@ -24,7 +24,7 @@ npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.1.
 
 ## 首次配置密钥
 
-不要在聊天中发送 API 密钥。在 PowerShell 中粘贴并运行以下代码，输入时内容不会显示：
+API 密钥来源于 [LumenVerba](https://lumenverba.cc/home) 网站。不要在聊天中发送 API 密钥。在 PowerShell 中粘贴并运行以下代码，输入时内容不会显示：
 
 ```powershell
 $OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
