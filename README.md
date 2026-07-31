@@ -70,6 +70,24 @@ Remove-Variable keyStillExists
 
 同一提示词可使用 `--count 2` 至 `--count 4` 在一次请求中生成多个版本，单批最多 4 张。多个不同提示词使用 `batch --prompt`，重复传入 2 至 4 个 `--prompt`；脚本会并发执行并按输入顺序输出成功图片路径。
 
+### 在 Codex 中使用
+
+同一提示词一次生成多张图片：
+
+```text
+请根据以下提示词生成 4 张不同版本的图片：雨夜中的上海街头，电影感摄影，霓虹灯倒映在路面上。
+```
+
+多个不同提示词并发生成：
+
+```text
+请同时生成两张图片：
+1. 清晨薄雾中的江南水乡，写实摄影风格。
+2. 火星基地内的植物温室，科幻概念艺术风格。
+```
+
+### 使用命令
+
 ```powershell
 python "skills/lumenverba-image/scripts/lumenverba_image.py" generate --prompt "同一提示词" --count 2
 python "skills/lumenverba-image/scripts/lumenverba_image.py" batch --prompt "第一张" --prompt "第二张"
