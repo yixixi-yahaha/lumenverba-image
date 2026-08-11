@@ -92,13 +92,15 @@ class PortableClientTests(unittest.TestCase):
         self.assertTrue(payload["stream"])
         self.assertEqual(payload["partial_images"], 1)
 
-    def test_generation_count_is_limited_to_four(self):
+    def test_generation_count_is_limited_to_ten(self):
         client = load_public_client()
 
-        self.assertEqual(client.build_generation_request("同一提示词", count=4)["n"], 4)
-        for invalid in (0, 5):
+        arguments = client._parser().parse_args(["generate", "--prompt", "同一提示词"])
+        self.assertEqual(arguments.count, 1)
+        self.assertEqual(client.build_generation_request("同一提示词", count=10)["n"], 10)
+        for invalid in (0, 11):
             with self.subTest(invalid=invalid):
-                with self.assertRaisesRegex(ValueError, "生成数量必须在 1 到 4 之间"):
+                with self.assertRaisesRegex(ValueError, "生成数量必须在 1 到 10 之间"):
                     client.build_generation_request("同一提示词", count=invalid)
 
     def test_generation_prompt_is_passed_through_verbatim(self):
@@ -341,8 +343,8 @@ class PackagedSkillTests(unittest.TestCase):
         for expected in (
             "--output-dir",
             "load_workspace_dependencies",
-            "/tree/v1.1.0/skills/lumenverba-image",
-            "当前最新稳定版 v1.1.0",
+            "/tree/v1.2.0/skills/lumenverba-image",
+            "当前最新稳定版 v1.2.0",
         ):
             self.assertIn(expected, readme + skill)
 
@@ -375,7 +377,8 @@ class PackagedSkillTests(unittest.TestCase):
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         for expected in (
-            "`--count 1..4`",
+            "`--count 1..10`",
+            "每批最多 4 项",
             "`batch`",
             "整批生成授权",
             "原样传递",
@@ -398,7 +401,14 @@ class PackagedSkillTests(unittest.TestCase):
 
     def test_readme_documents_batch_commands_and_limit(self):
         content = (ROOT / "README.md").read_text(encoding="utf-8")
-        for expected in ("--count", "batch --prompt", "最多 4 张", "部分失败"):
+        for expected in (
+            "--count",
+            "batch --prompt",
+            "最多 10 张",
+            "2 至 4 个 `--prompt`",
+            "并发生成上限为 4 张",
+            "部分失败",
+        ):
             self.assertIn(expected, content)
 
     def test_skill_documents_network_recovery_after_an_unknown_state(self):
