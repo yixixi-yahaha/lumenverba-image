@@ -28,7 +28,7 @@ description: Use when the user asks to generate images with Lumenverba, includin
 ## 快速执行
 
 - 用户在同一条指令中明确要求多张图片，即构成整批生成授权；不得逐张重复确认。
-- 同一提示词生成多个版本时，在 `generate`、`text` 或 `edit` 后传 `--count 1..4`。
+- 同一提示词生成多个版本时，在 `generate`、`text` 或 `edit` 后传 `--count 1..10`。
 - 多个不同提示词使用一次 `batch` 命令，并为每项重复传入 `--prompt`；每批最多 4 项。
 - 普通文生图与参考图编辑原样传递用户提示词，不复述、不扩写、不补充创意元素。
 - `text` 只由脚本追加固定的逐字准确约束。
