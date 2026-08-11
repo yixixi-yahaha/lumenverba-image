@@ -29,8 +29,9 @@ ALLOWED_SIZES = {"1024x1024", "1536x1024", "1024x1536"}
 ALLOWED_QUALITIES = {"low", "standard", "high"}
 MAX_REFERENCE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
-MAX_BATCH_SIZE = 4
-MAX_RESPONSE_BYTES = MAX_IMAGE_BYTES * MAX_BATCH_SIZE * 4 // 3 + 64 * 1024
+MAX_GENERATION_COUNT = 10
+MAX_BATCH_PROMPT_COUNT = 4
+MAX_RESPONSE_BYTES = MAX_IMAGE_BYTES * MAX_GENERATION_COUNT * 4 // 3 + 64 * 1024
 TIMEOUT_SECONDS = 600
 MAX_TASK_POLL_ATTEMPTS = 60
 TASK_POLL_INTERVAL_SECONDS = 1
@@ -63,8 +64,8 @@ def _select(value: str | None, allowed: set[str], default: str, label: str) -> s
 
 
 def _select_count(count: int) -> int:
-    if not 1 <= count <= MAX_BATCH_SIZE:
-        raise ValueError("生成数量必须在 1 到 4 之间。")
+    if not 1 <= count <= MAX_GENERATION_COUNT:
+        raise ValueError("生成数量必须在 1 到 10 之间。")
     return count
 
 
@@ -348,7 +349,7 @@ def generate_batch(
     quality: str | None,
     output_dir: Path,
 ) -> list[BatchItemResult]:
-    if not 2 <= len(prompts) <= MAX_BATCH_SIZE:
+    if not 2 <= len(prompts) <= MAX_BATCH_PROMPT_COUNT:
         raise ValueError("批量提示词数量必须在 2 到 4 之间。")
     if any(not isinstance(prompt, str) or not prompt.strip() for prompt in prompts):
         raise ValueError("批量提示词不能为空。")
@@ -376,7 +377,7 @@ def _parser() -> argparse.ArgumentParser:
         current.add_argument("--size", choices=sorted(ALLOWED_SIZES))
         current.add_argument("--quality", choices=sorted(ALLOWED_QUALITIES))
         current.add_argument("--output-dir", type=Path, default=Path.cwd() / "output")
-        current.add_argument("--count", type=int, choices=range(1, MAX_BATCH_SIZE + 1), default=1)
+        current.add_argument("--count", type=int, choices=range(1, MAX_GENERATION_COUNT + 1), default=1)
     subcommands.choices["generate"].add_argument("--prompt", required=True)
     subcommands.choices["edit"].add_argument("--prompt", required=True)
     subcommands.choices["edit"].add_argument("--reference", type=Path, action="append", required=True)
