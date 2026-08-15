@@ -22,6 +22,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -36,4 +38,4 @@ jobs:
           python skills/lumenverba-image/scripts/lumenverba_image.py edit --help
           python skills/lumenverba-image/scripts/lumenverba_image.py text --help
           python skills/lumenverba-image/scripts/lumenverba_image.py batch --help
-          git diff --check
+          git diff --check HEAD^ HEAD

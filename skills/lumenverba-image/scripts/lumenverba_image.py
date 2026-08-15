@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import mimetypes
 import os
@@ -44,6 +45,18 @@ RETRYABLE_NETWORK_ERROR_CATEGORIES = {
 }
 RETRY_NOTICE_PREFIX = "RETRY_NOTICE:"
 _RETRY_NOTICES: SimpleQueue[str] = SimpleQueue()
+
+
+class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.URLError("unsafe redirect")
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_RejectRedirectHandler())
+
+
+def _open_url(request: urllib.request.Request, timeout: int):
+    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
 
 
 class Settings:
@@ -162,14 +175,35 @@ def _take_retry_notices() -> list[str]:
 
 
 def _send(method: str, url: str, headers: dict[str, str], body: bytes = b"") -> tuple[int, dict[str, str], bytes]:
-    request = urllib.request.Request(url=url, data=body, headers=headers, method=method)
+    regular_headers = {
+        key: value for key, value in headers.items() if key.lower() != "authorization"
+    }
+    request = urllib.request.Request(url=url, data=body, headers=regular_headers, method=method)
+    for key, value in headers.items():
+        if key.lower() == "authorization":
+            request.add_unredirected_header(key, value)
+
+    def read_response(response, status: int) -> tuple[int, dict[str, str], bytes]:
+        geturl = getattr(response, "geturl", None)
+        final_url = geturl() if callable(geturl) else request.full_url
+        if isinstance(final_url, str) and final_url != request.full_url:
+            raise urllib.error.URLError("unsafe redirect")
+        try:
+            body_bytes = response.read(MAX_RESPONSE_BYTES + 1)
+        except (ConnectionError, OSError, TimeoutError, http.client.HTTPException) as error:
+            raise urllib.error.URLError(error) from error
+        return status, dict(response.headers.items()), body_bytes
 
     def send_once() -> tuple[int, dict[str, str], bytes]:
         try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-                return response.status, dict(response.headers.items()), response.read(MAX_RESPONSE_BYTES + 1)
+            with _open_url(request, timeout=TIMEOUT_SECONDS) as response:
+                return read_response(response, response.status)
         except urllib.error.HTTPError as error:
-            return error.code, dict(error.headers.items()), error.read(MAX_RESPONSE_BYTES + 1)
+            return read_response(error, error.code)
+        except urllib.error.URLError:
+            raise
+        except (ConnectionError, OSError, TimeoutError, http.client.HTTPException) as error:
+            raise urllib.error.URLError(error) from error
 
     try:
         return send_once()
@@ -297,12 +331,13 @@ def _task_location(headers: dict[str, str], settings: Settings) -> str:
     try:
         parsed = urllib.parse.urlsplit(task_url)
         base = urllib.parse.urlsplit(settings.base_url)
-        task_port = parsed.port or 443
-        base_port = base.port or 443
+        task_port = parsed.port if parsed.port is not None else 443
+        base_port = base.port if base.port is not None else 443
     except ValueError as error:
         raise RuntimeError("图像服务返回了不安全的任务地址。") from error
 
-    namespace = f"{base.path.rstrip('/')}/"
+    decoded_path = urllib.parse.unquote(parsed.path)
+    namespace = f"{urllib.parse.unquote(base.path).rstrip('/')}/"
     if (
         parsed.scheme != "https"
         or parsed.hostname != base.hostname
@@ -311,7 +346,9 @@ def _task_location(headers: dict[str, str], settings: Settings) -> str:
         or parsed.username is not None
         or parsed.password is not None
         or bool(parsed.fragment)
-        or not parsed.path.startswith(namespace)
+        or "\\" in decoded_path
+        or any(segment in {".", ".."} for segment in decoded_path.split("/"))
+        or not decoded_path.startswith(namespace)
     ):
         raise RuntimeError("图像服务返回了不安全的任务地址。")
     return task_url

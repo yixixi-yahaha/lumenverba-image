@@ -108,7 +108,7 @@ python skills/lumenverba-image/scripts/lumenverba_image.py generate --help
 python skills/lumenverba-image/scripts/lumenverba_image.py edit --help
 python skills/lumenverba-image/scripts/lumenverba_image.py text --help
 python skills/lumenverba-image/scripts/lumenverba_image.py batch --help
-git diff --check
+git diff --check HEAD^ HEAD
 ```
 
 真实 API 冒烟测试是正式发布前的人工门禁，不属于 CI：使用独立低额度测试密钥生成一张无文字图片并验证 PNG；只有文字图相关变更才额外生成中文文字图，人工确认文字完整、清晰且没有额外文案。默认测试和 PR 检查不读取 API 密钥，也不访问 Lumenverba。

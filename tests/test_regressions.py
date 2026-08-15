@@ -95,7 +95,7 @@ class RetryRegressionTests(unittest.TestCase):
             response,
         ]
 
-        with patch.object(client.urllib.request, "urlopen", side_effect=failures) as urlopen:
+        with patch.object(client, "_open_url", side_effect=failures) as urlopen:
             with redirect_stderr(StringIO()):
                 client._send("GET", "https://api.lumenverba.cc/v1/tasks/task-1", {"X-Test": "value"})
 
@@ -120,7 +120,7 @@ class RetryRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result_file = (Path(directory) / "result.json").resolve()
             with patch.dict(os.environ, {"LUMENVERBA_API_KEY": "test-key"}, clear=True):
-                with patch.object(client.urllib.request, "urlopen", side_effect=[accepted, first_error, completed]):
+                with patch.object(client, "_open_url", side_effect=[accepted, first_error, completed]):
                     with redirect_stdout(stdout), redirect_stderr(stderr):
                         exit_code = client.main([
                             "generate",

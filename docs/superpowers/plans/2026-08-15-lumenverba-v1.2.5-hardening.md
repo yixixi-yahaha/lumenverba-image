@@ -271,7 +271,7 @@ Expected: more than zero tests execute and all pass.
 
 - [ ] **Step 3: Add the GitHub Actions workflow**
 
-Create a matrix for `windows-latest` and `ubuntu-latest` with Python `3.11` and `3.14`. Run unit discovery, `compileall`, root and subcommand help, and `git diff --check`. Do not configure secrets or live network tests.
+Create a matrix for `windows-latest` and `ubuntu-latest` with Python `3.11` and `3.14`. Run unit discovery, `compileall`, root and subcommand help, and `git diff --check HEAD^ HEAD` with enough checkout history. Do not configure secrets or live network tests.
 
 - [ ] **Step 4: Run the complete local gate**
 
@@ -286,7 +286,7 @@ python skills/lumenverba-image/scripts/lumenverba_image.py generate --help
 python skills/lumenverba-image/scripts/lumenverba_image.py edit --help
 python skills/lumenverba-image/scripts/lumenverba_image.py text --help
 python skills/lumenverba-image/scripts/lumenverba_image.py batch --help
-git diff --check
+git diff --check HEAD^ HEAD
 ```
 
 Expected: all commands exit 0; both discovery commands execute the full suite.
