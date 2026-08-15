@@ -406,10 +406,25 @@ class PackagedSkillTests(unittest.TestCase):
         for expected in (
             "--output-dir",
             "load_workspace_dependencies",
-            "/tree/v1.2.4/skills/lumenverba-image",
-            "当前最新稳定版 v1.2.4",
+            "/tree/v1.2.5/skills/lumenverba-image",
+            "当前最新稳定版 v1.2.5",
         ):
             self.assertIn(expected, readme + skill)
+
+    def test_documentation_declares_request_retry_boundaries(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for content in (readme, skill):
+            self.assertIn("创建请求不会自动重试", content)
+            self.assertIn("读取请求", content)
+            self.assertIn("最多自动重试 1 次", content)
+
+    def test_repository_includes_mit_license(self):
+        license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
+
+        self.assertIn("MIT License", license_text)
+        self.assertIn("Copyright (c) 2026 yixixi-yahaha", license_text)
 
     def test_readme_documents_clean_uninstall(self):
         content = (ROOT / "README.md").read_text(encoding="utf-8")

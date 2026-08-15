@@ -24,7 +24,7 @@ description: Use when the user asks to generate images with Lumenverba, includin
 - 直接执行同级 `scripts/lumenverba_image.py`；不得使用 `python -c`、内联 Python 或动态拼接 Python 源码。
 - 在 PowerShell 中，把提示词、指定文字和描述等动态文本参数放在单引号内；参数内容中的单引号写成两个单引号。例如 `--text 'O''Reilly 夏日$特惠'`。`$`、反引号和双引号在这种写法中会按原文传入。
 - 文字生图固定使用 `text` 子命令，不要手动为指定文字添加引号；脚本会在 `build_text_prompt()` 中构造逐字准确约束。
-- 执行时以技能目录中的 `scripts/lumenverba_image.py` 为脚本路径。脚本成功时 stdout 只返回生成 PNG 的绝对路径；失败诊断和重试提示写入 stderr。脚本仅对 `DNS 解析失败`、`TLS 连接失败`、`连接被拒绝`、`代理连接失败`自动重试 1 次；`网络连接超时`、连接中途关闭、通用网络失败和生成状态未知不自动重试。
+- 执行时以技能目录中的 `scripts/lumenverba_image.py` 为脚本路径。脚本成功时 stdout 只返回生成 PNG 的绝对路径；失败诊断和重试提示写入 stderr。创建请求不会自动重试，网络失败时生成状态未知。读取请求仅在首次出现 `DNS 解析失败`、`TLS 连接失败`、`连接被拒绝`或`代理连接失败`时最多自动重试 1 次；`网络连接超时`、连接中途关闭和通用网络失败不自动重试。
 
 ## 快速执行
 
