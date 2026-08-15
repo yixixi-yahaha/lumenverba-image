@@ -11,16 +11,16 @@
 新建一个 Codex 对话，发送以下内容：
 
 ```text
-请从 https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.2.0/skills/lumenverba-image 安装 lumenverba-image 技能（当前最新稳定版 v1.2.0）。
+请从 https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.2.5/skills/lumenverba-image 安装 lumenverba-image 技能（当前最新稳定版 v1.2.5）。
 ```
 
 ### 使用命令安装
 
 ```powershell
-npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.2.0/skills/lumenverba-image" -g -y
+npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.2.5/skills/lumenverba-image" -g -y
 ```
 
-当前最新稳定版为 `v1.2.0`。安装命令固定到发布标签；更新时请改用新的发布标签 URL，而不要继续使用旧版本链接。安装完成后，重新打开 Codex。技能会在文生图、参考图生图、海报、角色图、插画或包含指定清晰文字的图片请求中自动启用。
+当前最新稳定版为 `v1.2.5`。安装命令固定到发布标签；更新时请改用新的发布标签 URL，而不要继续使用旧版本链接。安装完成后，重新打开 Codex。技能会在文生图、参考图生图、海报、角色图、插画或包含指定清晰文字的图片请求中自动启用。
 
 ## 首次配置密钥
 
@@ -93,8 +93,22 @@ python "skills/lumenverba-image/scripts/lumenverba_image.py" generate --prompt "
 python "skills/lumenverba-image/scripts/lumenverba_image.py" batch --prompt "第一张" --prompt "第二张"
 ```
 
-全部成功时退出码为 `0`。部分失败时已成功图片仍保留并输出，失败批次项写入标准错误，退出码为 `1`。创建请求不会自动重试或切换生成方式。
+全部成功时退出码为 `0`。部分失败时已成功图片仍保留并输出，失败批次项写入标准错误，退出码为 `1`。创建请求不会自动重试或切换生成方式。读取请求仅在首次出现 DNS 解析失败、TLS 连接失败、连接被拒绝或代理连接失败时最多自动重试 1 次；超时及其他网络错误不重试。
 
 ## 维护者发布验证
 
-本节仅面向维护者；普通安装用户可跳过。每个发布标签前运行离线单元测试和 CLI 契约测试。真实 API 冒烟测试仅由维护者人工触发，并使用独立低额度测试密钥：每次发布生成一张无文字图片并验证 PNG；只有文字图相关变更才额外生成中文文字图，人工确认文字完整、清晰且没有额外文案。默认测试和 PR 检查不访问 Lumenverba。
+本节仅面向维护者；普通安装用户可跳过。每个发布标签前从 `main` 分支运行以下离线发布门禁：
+
+```powershell
+python -m unittest discover -s tests -v
+python -m unittest discover -v
+python -m compileall -q skills tests
+python skills/lumenverba-image/scripts/lumenverba_image.py --help
+python skills/lumenverba-image/scripts/lumenverba_image.py generate --help
+python skills/lumenverba-image/scripts/lumenverba_image.py edit --help
+python skills/lumenverba-image/scripts/lumenverba_image.py text --help
+python skills/lumenverba-image/scripts/lumenverba_image.py batch --help
+git diff --check HEAD^ HEAD
+```
+
+真实 API 冒烟测试是正式发布前的人工门禁，不属于 CI：使用独立低额度测试密钥生成一张无文字图片并验证 PNG；只有文字图相关变更才额外生成中文文字图，人工确认文字完整、清晰且没有额外文案。默认测试和 PR 检查不读取 API 密钥，也不访问 Lumenverba。

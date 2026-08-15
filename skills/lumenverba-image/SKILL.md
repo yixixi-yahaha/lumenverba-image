@@ -5,6 +5,8 @@ description: Use when the user asks to generate images with Lumenverba, includin
 
 # Lumenverba 绘图
 
+当前技能版本：`v1.2.5`。
+
 使用本技能同级 `scripts/lumenverba_image.py` 直接调用 Lumenverba 图像 API。执行前先从当前 `SKILL.md` 的实际位置推导技能目录；不得使用固定的本机绝对路径，也不调用旧 MCP 服务。
 
 ## 专用边界
@@ -17,13 +19,14 @@ description: Use when the user asks to generate images with Lumenverba, includin
 - 先从当前 `SKILL.md` 推导技能目录和同级脚本路径；此阶段不得联网。
 - 先确认 `python --version` 可执行且不低于 3.11；否则在 Codex Desktop 调用 `load_workspace_dependencies`，使用其返回的 Python executable。不得读取脚本源码或猜测替代命令。
 - 确定子命令、`--model`、`--size`、`--quality`、数量和 `--output-dir` 后，才为该最终命令申请一次联网权限。
+- 每个最终命令都必须在执行前确定一个本次调用唯一的绝对 JSON 回执路径，并通过 `--result-file` `<绝对路径>` 传给脚本。该路径必须保留在当前对话中，不能依赖命令输出找回。
 - 文生图使用 `generate --prompt`。
 - 参考图生图使用 `edit --prompt --reference <绝对图片路径>`；可重复传入多个 `--reference`。
 - 指定文字生图使用 `text --text --description`，并把文字语言、位置和样式传给 `--language`、`--position`、`--style`。
 - 直接执行同级 `scripts/lumenverba_image.py`；不得使用 `python -c`、内联 Python 或动态拼接 Python 源码。
 - 在 PowerShell 中，把提示词、指定文字和描述等动态文本参数放在单引号内；参数内容中的单引号写成两个单引号。例如 `--text 'O''Reilly 夏日$特惠'`。`$`、反引号和双引号在这种写法中会按原文传入。
 - 文字生图固定使用 `text` 子命令，不要手动为指定文字添加引号；脚本会在 `build_text_prompt()` 中构造逐字准确约束。
-- 执行时以技能目录中的 `scripts/lumenverba_image.py` 为脚本路径。脚本成功时标准输出只返回生成 PNG 的绝对路径；失败时标准错误输出中文诊断并以非零退出。网络错误会显示安全的原因类别和生成状态未知：请直接回复“允许联网”，再由用户重新发送该请求；不得自动重试。
+- 执行时以技能目录中的 `scripts/lumenverba_image.py` 为脚本路径。脚本成功时 stdout 只返回生成 PNG 的绝对路径；失败诊断和重试提示写入 stderr。创建请求不会自动重试，网络失败时生成状态未知。读取请求仅在首次出现 `DNS 解析失败`、`TLS 连接失败`、`连接被拒绝`或`代理连接失败`时最多自动重试 1 次；`网络连接超时`、连接中途关闭和通用网络失败不自动重试。
 
 ## 快速执行
 
@@ -36,10 +39,17 @@ description: Use when the user asks to generate images with Lumenverba, includin
 
 ## 结果交付
 
+- 命令仍在运行时继续等待，不得扫描输出目录、推断生成数量或启动第二次生成。
+- 已取得完整 stdout、stderr 和退出码时，以 stdout 的 PNG 绝对路径为成功结果，并依据 stderr 和退出码报告批次状态。
+- 若实际返回图片数量与请求数量不一致，无论多于还是少于预期，都不得丢弃已返回的图片；逐一验证所有返回路径后全部交付，并将数量异常作为 `partial` 状态和安全诊断报告。
+- 命令执行通道已结束但没有返回完整 stdout、stderr 和退出码时，使用一次不联网的文件读取操作读取该回执；不得重新执行生图命令。
+- 回执必须是版本 `1` 的完整 JSON，`status` 只能是 `success`、`partial` 或 `error`，`exit_code` 必须是整数，`paths` 必须是本次调用返回的 PNG 绝对路径列表，`errors` 必须是字符串列表。`success` 必须对应退出码 0，`partial` 必须对应非零退出码和非空 `paths`，`error` 必须对应非零退出码和空 `paths`。逐一校验回执指定的路径存在且为 PNG 后，按回执交付成功图片和安全诊断。
+- 回执不存在、无法解析或校验失败时，只报告“命令结果通道和结果回执均不可用，执行状态未知。”；不得扫描输出目录、按文件数量或时间戳推断结果。回执中的 `paths` 无论数量是否符合请求，都必须逐一验证并全部交付；数量异常只影响状态和诊断，不得造成路径截断。
 - stdout 中的每一行都是成功 PNG 的绝对路径；逐张用 Markdown 图片链接展示。
+- 若 stderr 包含 `RETRY_NOTICE:` 且 stdout 包含成功 PNG，先展示全部成功图片，再附注“首次失败原因：<安全分类>；自动重试一次后成功。”；不得把该提示当作批次失败。
 - stderr 中的批次项错误只做简要报告；部分失败时仍展示全部成功图片。
 - 只校验返回数量、PNG、绝对路径和批次状态，不得进行视觉检查。
-- 不得自动调整提示词、重新生成、重试创建请求或把单请求多图改为并发单图。
+- 不得自动调整提示词、重新生成、在脚本之外重试创建请求、把单请求多图改为并发单图，或在结果通道丢失时重复执行原命令。
 
 ## 参数选择
 

@@ -2,21 +2,26 @@ import base64
 import importlib.util
 import json
 import os
+import re
+import subprocess
 import sys
 import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = ROOT / "skills" / "lumenverba-image"
 SCRIPT_PATH = SKILL_ROOT / "scripts" / "lumenverba_image.py"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PUBLIC_FILES = (ROOT / "README.md", SKILL_ROOT / "SKILL.md", SCRIPT_PATH)
+EXPECTED_STABLE_VERSION = "v1.2.5"
 PNG_BYTES = b"\x89PNG\r\n\x1a\nexample"
 
 
@@ -38,6 +43,31 @@ class PublicSkillPrivacyTests(unittest.TestCase):
             for forbidden in forbidden_paths:
                 self.assertNotIn(forbidden, content, f"公开文件泄露了本机路径: {path}")
             self.assertNotIn("LUMENVERBA_API_KEY=", content, f"公开文件包含密钥赋值: {path}")
+
+    def test_tracked_public_text_has_no_machine_specific_paths(self):
+        result = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        )
+        machine_path_patterns = (
+            r"(?i)[a-z]:[\\/]+users[\\/]+[^\\/\s`\"']+",
+            r"(?i)(?<!https:)(?<!http:)/users/[^/\s`\"']+",
+            r"(?i)/home/[^/\s`\"']+",
+        )
+        for raw_path in result.stdout.decode("utf-8").split("\0"):
+            if not raw_path:
+                continue
+            relative = Path(raw_path)
+            if relative.parts[0] == "tests":
+                continue
+            if relative.suffix.lower() not in {".md", ".py", ".yml", ".yaml"} and relative.name != "LICENSE":
+                continue
+            content = (ROOT / relative).read_text(encoding="utf-8")
+            for pattern in machine_path_patterns:
+                with self.subTest(path=raw_path, pattern=pattern):
+                    self.assertIsNone(re.search(pattern, content))
 
 
 class PortableClientTests(unittest.TestCase):
@@ -61,14 +91,145 @@ class PortableClientTests(unittest.TestCase):
         with patch.dict(os.environ, {"LUMENVERBA_API_KEY": "test-key"}, clear=True):
             self.assertEqual(client.Settings.from_environment().base_url, "https://api.lumenverba.cc/v1")
 
-    def test_network_error_reports_a_safe_category_and_network_recovery(self):
+    def test_creation_network_error_is_not_retried(self):
         client = load_public_client()
 
-        with patch.object(client.urllib.request, "urlopen", side_effect=client.urllib.error.URLError("TLS EOF")) as urlopen:
-            with self.assertRaisesRegex(RuntimeError, "TLS 连接失败.*生成状态未知.*回复“允许联网”.*重新发送该请求"):
+        with patch.object(client, "_open_url", side_effect=client.urllib.error.URLError("TLS EOF")) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "TLS 连接失败.*生成状态未知.*未自动重试"):
                 client._send("POST", "https://api.lumenverba.cc/v1/images/generations", {})
 
         self.assertEqual(urlopen.call_count, 1)
+
+    def test_read_network_error_retries_once(self):
+        client = load_public_client()
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.status = 200
+        response.headers = {"Content-Type": "application/json"}
+        response.read.return_value = b"{}"
+        first_error = client.urllib.error.URLError(client.ssl.SSLError("private TLS detail"))
+        stderr = StringIO()
+
+        with patch.object(client, "_open_url", side_effect=[first_error, response]) as urlopen:
+            with redirect_stderr(stderr):
+                status, _, body = client._send(
+                    "GET",
+                    "https://api.lumenverba.cc/v1/tasks/task-1",
+                    {},
+                )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"{}")
+        self.assertEqual(urlopen.call_count, 2)
+        self.assertIn("RETRY_NOTICE:", stderr.getvalue())
+
+    def test_read_body_tls_error_retries_once(self):
+        client = load_public_client()
+        first_response = MagicMock()
+        first_response.__enter__.return_value = first_response
+        first_response.status = 200
+        first_response.headers = {"Content-Type": "application/json"}
+        first_response.read.side_effect = client.ssl.SSLError("private TLS detail")
+        second_response = MagicMock()
+        second_response.__enter__.return_value = second_response
+        second_response.status = 200
+        second_response.headers = {"Content-Type": "application/json"}
+        second_response.read.return_value = b"{}"
+
+        with patch.object(
+            client,
+            "_open_url",
+            side_effect=[first_response, second_response],
+        ) as urlopen:
+            with redirect_stderr(StringIO()):
+                status, _, body = client._send(
+                    "GET",
+                    "https://api.lumenverba.cc/v1/tasks/task-1",
+                    {},
+                )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"{}")
+        self.assertEqual(urlopen.call_count, 2)
+
+    def test_creation_body_connection_error_is_not_retried(self):
+        client = load_public_client()
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.status = 200
+        response.headers = {"Content-Type": "application/json"}
+        response.read.side_effect = ConnectionResetError("private connection detail")
+
+        with patch.object(client, "_open_url", return_value=response) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "生成状态未知.*创建请求未自动重试"):
+                client._send(
+                    "POST",
+                    "https://api.lumenverba.cc/v1/images/generations",
+                    {},
+                )
+
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_read_timeout_is_not_retried(self):
+        client = load_public_client()
+
+        with patch.object(
+            client,
+            "_open_url",
+            side_effect=client.urllib.error.URLError(TimeoutError("private timeout")),
+        ) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "网络连接超时.*未自动重试"):
+                client._send("GET", "https://api.lumenverba.cc/v1/tasks/task-1", {})
+
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_authorization_is_not_forwarded_to_a_redirect_target(self):
+        client = load_public_client()
+        redirected_authorizations: list[str | None] = []
+
+        class TargetHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                redirected_authorizations.append(self.headers.get("Authorization"))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, format, *args):
+                pass
+
+        target_server = ThreadingHTTPServer(("127.0.0.1", 0), TargetHandler)
+        target_thread = threading.Thread(target=target_server.serve_forever)
+        target_thread.start()
+
+        class RedirectHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{target_server.server_port}/result")
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                pass
+
+        redirect_server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+        redirect_thread = threading.Thread(target=redirect_server.serve_forever)
+        redirect_thread.start()
+        try:
+            with self.assertRaisesRegex(RuntimeError, "读取图像服务.*未自动重试"):
+                client._send(
+                    "GET",
+                    f"http://127.0.0.1:{redirect_server.server_port}/start",
+                    {"Authorization": "Bearer secret"},
+                )
+        finally:
+            redirect_server.shutdown()
+            redirect_server.server_close()
+            redirect_thread.join()
+            target_server.shutdown()
+            target_server.server_close()
+            target_thread.join()
+
+        self.assertEqual(redirected_authorizations, [])
 
     def test_network_error_categories_do_not_expose_raw_error_text(self):
         client = load_public_client()
@@ -311,6 +472,36 @@ class PortableClientTests(unittest.TestCase):
                         Path(directory),
                     )
 
+    def test_accepted_task_rejects_external_https_location(self):
+        client = load_public_client()
+
+        with self.assertRaisesRegex(RuntimeError, "不安全的任务地址"):
+            client._task_location(
+                {"Location": "https://attacker.example/v1/tasks/task-1"},
+                client.Settings("test-key"),
+            )
+
+    def test_task_location_rejects_untrusted_url_shapes(self):
+        client = load_public_client()
+        invalid_locations = (
+            "//api.lumenverba.cc/v1/tasks/task-1",
+            "https://api.lumenverba.cc:444/v1/tasks/task-1",
+            "https://api.lumenverba.cc:0/v1/tasks/task-1",
+            "https://user@api.lumenverba.cc/v1/tasks/task-1",
+            "https://api.lumenverba.cc/v1/tasks/task-1#fragment",
+            "https://api.lumenverba.cc/private/task-1",
+            "https://api.lumenverba.cc/v1/%2e%2e/private/task-1",
+            "https://api.lumenverba.cc/v1/%2F..%2Fprivate/task-1",
+        )
+
+        for location in invalid_locations:
+            with self.subTest(location=location):
+                with self.assertRaisesRegex(RuntimeError, "不安全的任务地址"):
+                    client._task_location(
+                        {"Location": location},
+                        client.Settings("test-key"),
+                    )
+
     def test_rejects_non_https_generated_image_url(self):
         client = load_public_client()
         response = json.dumps({"data": [{"url": "file:///private.png"}]}).encode("utf-8")
@@ -343,10 +534,59 @@ class PackagedSkillTests(unittest.TestCase):
         for expected in (
             "--output-dir",
             "load_workspace_dependencies",
-            "/tree/v1.2.0/skills/lumenverba-image",
-            "当前最新稳定版 v1.2.0",
+            "/tree/v1.2.5/skills/lumenverba-image",
+            "当前最新稳定版 v1.2.5",
         ):
             self.assertIn(expected, readme + skill)
+
+    def test_documentation_declares_request_retry_boundaries(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for content in (readme, skill):
+            self.assertIn("创建请求不会自动重试", content)
+            self.assertIn("读取请求", content)
+            self.assertIn("最多自动重试 1 次", content)
+
+    def test_repository_includes_mit_license(self):
+        license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
+
+        self.assertIn("MIT License", license_text)
+        self.assertIn("Copyright (c) 2026 yixixi-yahaha", license_text)
+
+    def test_release_metadata_agrees_on_stable_version(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn(EXPECTED_STABLE_VERSION, readme)
+        self.assertIn(EXPECTED_STABLE_VERSION, skill)
+        self.assertEqual(
+            {EXPECTED_STABLE_VERSION},
+            set(re.findall(r"v\d+\.\d+\.\d+", readme + skill)),
+        )
+
+    def test_ci_workflow_enforces_the_offline_release_gate(self):
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        for expected in (
+            "windows-latest",
+            "ubuntu-latest",
+            '"3.11"',
+            '"3.14"',
+            "python -m unittest discover -s tests -v",
+            "python -m unittest discover -v",
+            "python -m compileall -q skills tests",
+            "lumenverba_image.py --help",
+            "lumenverba_image.py generate --help",
+            "lumenverba_image.py edit --help",
+            "lumenverba_image.py text --help",
+            "lumenverba_image.py batch --help",
+            "git diff --check HEAD^ HEAD",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, workflow)
+
+        self.assertNotIn("secrets.", workflow)
 
     def test_readme_documents_clean_uninstall(self):
         content = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -385,7 +625,8 @@ class PackagedSkillTests(unittest.TestCase):
             "不得进行视觉检查",
             "成功图片",
             "批次项",
-            "不得自动重试",
+            "自动重试 1 次",
+            "RETRY_NOTICE:",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, content)
@@ -416,12 +657,15 @@ class PackagedSkillTests(unittest.TestCase):
 
         for expected in (
             "生成状态未知",
-            "回复“允许联网”",
-            "重新发送该请求",
-            "不得自动重试",
+            "自动重试 1 次",
+            "RETRY_NOTICE:",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, content)
+
+        for forbidden in ("回复“允许联网”", "重新发送该请求"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, content)
 
     def test_skill_documents_secure_first_use_and_all_modes(self):
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
