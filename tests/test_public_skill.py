@@ -668,6 +668,19 @@ class PackagedSkillTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertIn(expected, content)
 
+    def test_skill_waits_for_a_delayed_result_receipt_after_output_is_lost(self):
+        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "每秒",
+            "最多等待 60 秒",
+            "同一回执",
+            "校验成功即停止等待",
+            "不得重新执行生图命令",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, content)
+
     def test_readme_documents_batch_commands_and_limit(self):
         content = (ROOT / "README.md").read_text(encoding="utf-8")
         for expected in (
