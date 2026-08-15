@@ -5,6 +5,8 @@ description: Use when the user asks to generate images with Lumenverba, includin
 
 # Lumenverba 绘图
 
+当前技能版本：`v1.2.5`。
+
 使用本技能同级 `scripts/lumenverba_image.py` 直接调用 Lumenverba 图像 API。执行前先从当前 `SKILL.md` 的实际位置推导技能目录；不得使用固定的本机绝对路径，也不调用旧 MCP 服务。
 
 ## 专用边界

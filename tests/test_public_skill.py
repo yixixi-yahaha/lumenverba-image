@@ -2,6 +2,8 @@ import base64
 import importlib.util
 import json
 import os
+import re
+import subprocess
 import sys
 import tempfile
 import threading
@@ -16,7 +18,9 @@ from unittest.mock import MagicMock, patch
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = ROOT / "skills" / "lumenverba-image"
 SCRIPT_PATH = SKILL_ROOT / "scripts" / "lumenverba_image.py"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PUBLIC_FILES = (ROOT / "README.md", SKILL_ROOT / "SKILL.md", SCRIPT_PATH)
+EXPECTED_STABLE_VERSION = "v1.2.5"
 PNG_BYTES = b"\x89PNG\r\n\x1a\nexample"
 
 
@@ -38,6 +42,31 @@ class PublicSkillPrivacyTests(unittest.TestCase):
             for forbidden in forbidden_paths:
                 self.assertNotIn(forbidden, content, f"公开文件泄露了本机路径: {path}")
             self.assertNotIn("LUMENVERBA_API_KEY=", content, f"公开文件包含密钥赋值: {path}")
+
+    def test_tracked_public_text_has_no_machine_specific_paths(self):
+        result = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        )
+        machine_path_patterns = (
+            r"(?i)[a-z]:[\\/]+users[\\/]+[^\\/\s`\"']+",
+            r"(?i)(?<!https:)(?<!http:)/users/[^/\s`\"']+",
+            r"(?i)/home/[^/\s`\"']+",
+        )
+        for raw_path in result.stdout.decode("utf-8").split("\0"):
+            if not raw_path:
+                continue
+            relative = Path(raw_path)
+            if relative.parts[0] == "tests":
+                continue
+            if relative.suffix.lower() not in {".md", ".py", ".yml", ".yaml"} and relative.name != "LICENSE":
+                continue
+            content = (ROOT / relative).read_text(encoding="utf-8")
+            for pattern in machine_path_patterns:
+                with self.subTest(path=raw_path, pattern=pattern):
+                    self.assertIsNone(re.search(pattern, content))
 
 
 class PortableClientTests(unittest.TestCase):
@@ -425,6 +454,40 @@ class PackagedSkillTests(unittest.TestCase):
 
         self.assertIn("MIT License", license_text)
         self.assertIn("Copyright (c) 2026 yixixi-yahaha", license_text)
+
+    def test_release_metadata_agrees_on_stable_version(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn(EXPECTED_STABLE_VERSION, readme)
+        self.assertIn(EXPECTED_STABLE_VERSION, skill)
+        self.assertEqual(
+            {EXPECTED_STABLE_VERSION},
+            set(re.findall(r"v\d+\.\d+\.\d+", readme + skill)),
+        )
+
+    def test_ci_workflow_enforces_the_offline_release_gate(self):
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        for expected in (
+            "windows-latest",
+            "ubuntu-latest",
+            '"3.11"',
+            '"3.14"',
+            "python -m unittest discover -s tests -v",
+            "python -m unittest discover -v",
+            "python -m compileall -q skills tests",
+            "lumenverba_image.py --help",
+            "lumenverba_image.py generate --help",
+            "lumenverba_image.py edit --help",
+            "lumenverba_image.py text --help",
+            "lumenverba_image.py batch --help",
+            "git diff --check",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, workflow)
+
+        self.assertNotIn("secrets.", workflow)
 
     def test_readme_documents_clean_uninstall(self):
         content = (ROOT / "README.md").read_text(encoding="utf-8")
