@@ -65,10 +65,10 @@ class PortableClientTests(unittest.TestCase):
         client = load_public_client()
 
         with patch.object(client.urllib.request, "urlopen", side_effect=client.urllib.error.URLError("TLS EOF")) as urlopen:
-            with self.assertRaisesRegex(RuntimeError, "TLS 连接失败.*生成状态未知.*回复“允许联网”.*重新发送该请求"):
+            with self.assertRaisesRegex(RuntimeError, "首次发生TLS 连接失败.*自动重试后发生TLS 连接失败.*生成状态未知"):
                 client._send("POST", "https://api.lumenverba.cc/v1/images/generations", {})
 
-        self.assertEqual(urlopen.call_count, 1)
+        self.assertEqual(urlopen.call_count, 2)
 
     def test_network_error_categories_do_not_expose_raw_error_text(self):
         client = load_public_client()
@@ -343,8 +343,8 @@ class PackagedSkillTests(unittest.TestCase):
         for expected in (
             "--output-dir",
             "load_workspace_dependencies",
-            "/tree/v1.2.0/skills/lumenverba-image",
-            "当前最新稳定版 v1.2.0",
+            "/tree/v1.2.4/skills/lumenverba-image",
+            "当前最新稳定版 v1.2.4",
         ):
             self.assertIn(expected, readme + skill)
 
@@ -385,7 +385,8 @@ class PackagedSkillTests(unittest.TestCase):
             "不得进行视觉检查",
             "成功图片",
             "批次项",
-            "不得自动重试",
+            "自动重试 1 次",
+            "RETRY_NOTICE:",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, content)
@@ -416,12 +417,15 @@ class PackagedSkillTests(unittest.TestCase):
 
         for expected in (
             "生成状态未知",
-            "回复“允许联网”",
-            "重新发送该请求",
-            "不得自动重试",
+            "自动重试 1 次",
+            "RETRY_NOTICE:",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, content)
+
+        for forbidden in ("回复“允许联网”", "重新发送该请求"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, content)
 
     def test_skill_documents_secure_first_use_and_all_modes(self):
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
