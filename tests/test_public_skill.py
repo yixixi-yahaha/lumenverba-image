@@ -146,6 +146,203 @@ class PortableClientTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "生成数量必须在 1 到 10 之间"):
                     client.build_generation_request("同一提示词", count=invalid)
 
+    def test_result_receipt_option_is_available_in_every_command_mode(self):
+        client = load_public_client()
+        result_file = Path("C:/results/current.json")
+        commands = (
+            ["generate", "--prompt", "测试", "--result-file", str(result_file)],
+            ["edit", "--prompt", "测试", "--reference", "C:/reference.png", "--result-file", str(result_file)],
+            ["text", "--text", "测试", "--description", "测试", "--result-file", str(result_file)],
+            ["batch", "--prompt", "first", "--prompt", "second", "--result-file", str(result_file)],
+        )
+
+        for command in commands:
+            with self.subTest(command=command[0]):
+                arguments = client._parser().parse_args(command)
+                self.assertEqual(arguments.result_file, result_file)
+
+    def test_successful_command_writes_a_result_receipt_without_changing_stdout(self):
+        client = load_public_client()
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with tempfile.TemporaryDirectory() as directory:
+            returned = [(Path(directory) / "generated.png").resolve()]
+            result_file = (Path(directory) / "result.json").resolve()
+            with patch.object(client, "generate", return_value=returned):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    exit_code = client.main([
+                        "generate",
+                        "--prompt",
+                        "测试",
+                        "--result-file",
+                        str(result_file),
+                    ])
+            receipt = json.loads(result_file.read_text(encoding="utf-8"))
+            temporary_files = list(result_file.parent.glob(f".{result_file.name}.*.tmp"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue().splitlines(), [str(returned[0])])
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(receipt, {
+            "version": 1,
+            "status": "success",
+            "exit_code": 0,
+            "paths": [str(returned[0])],
+            "errors": [],
+        })
+        self.assertEqual(temporary_files, [])
+
+    def test_successful_retry_notice_is_preserved_in_result_receipt(self):
+        client = load_public_client()
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with tempfile.TemporaryDirectory() as directory:
+            returned = [(Path(directory) / "generated.png").resolve()]
+            result_file = (Path(directory) / "result.json").resolve()
+
+            def generate_after_retry(*_args):
+                client._record_retry_notice("TLS 连接失败")
+                return returned
+
+            with patch.object(client, "generate", side_effect=generate_after_retry):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    exit_code = client.main([
+                        "generate",
+                        "--prompt",
+                        "测试",
+                        "--result-file",
+                        str(result_file),
+                    ])
+            receipt = json.loads(result_file.read_text(encoding="utf-8"))
+
+        notice = "RETRY_NOTICE: 首次调用失败：TLS 连接失败；已自动重试 1 次。"
+        self.assertEqual(exit_code, 0)
+        self.assertIn(notice, stderr.getvalue())
+        self.assertEqual(receipt["status"], "success")
+        self.assertEqual(receipt["errors"], [notice])
+
+    def test_failed_command_writes_an_error_result_receipt(self):
+        client = load_public_client()
+        stderr = StringIO()
+
+        with tempfile.TemporaryDirectory() as directory:
+            result_file = (Path(directory) / "result.json").resolve()
+            with patch.object(client, "generate", side_effect=RuntimeError("模拟失败")):
+                with redirect_stderr(stderr):
+                    exit_code = client.main([
+                        "generate",
+                        "--prompt",
+                        "测试",
+                        "--result-file",
+                        str(result_file),
+                    ])
+            receipt = json.loads(result_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("模拟失败", stderr.getvalue())
+        self.assertEqual(receipt, {
+            "version": 1,
+            "status": "error",
+            "exit_code": 1,
+            "paths": [],
+            "errors": ["模拟失败"],
+        })
+
+    def test_partial_command_writes_success_paths_and_numbered_errors_to_result_receipt(self):
+        client = load_public_client()
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with tempfile.TemporaryDirectory() as directory:
+            returned = [(Path(directory) / "first.png").resolve()]
+            result_file = (Path(directory) / "result.json").resolve()
+            with patch.object(client, "generate", return_value=returned):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    exit_code = client.main([
+                        "generate",
+                        "--prompt",
+                        "测试",
+                        "--count",
+                        "2",
+                        "--result-file",
+                        str(result_file),
+                    ])
+            receipt = json.loads(result_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(receipt["status"], "partial")
+        self.assertEqual(receipt["paths"], [str(returned[0])])
+        self.assertEqual(receipt["errors"], ["批次项 2 失败: 图像服务未返回该图片。"])
+
+    def test_command_rejects_more_images_than_requested_in_result_receipt(self):
+        client = load_public_client()
+
+        with tempfile.TemporaryDirectory() as directory:
+            returned = [
+                (Path(directory) / "first.png").resolve(),
+                (Path(directory) / "unexpected.png").resolve(),
+            ]
+            result_file = (Path(directory) / "result.json").resolve()
+            with patch.object(client, "generate", return_value=returned):
+                with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                    exit_code = client.main([
+                        "generate",
+                        "--prompt",
+                        "测试",
+                        "--count",
+                        "1",
+                        "--result-file",
+                        str(result_file),
+                    ])
+            receipt = json.loads(result_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(receipt["status"], "partial")
+        self.assertEqual(receipt["paths"], [str(path) for path in returned])
+
+    def test_receipt_write_failure_keeps_generated_paths_and_returns_nonzero(self):
+        client = load_public_client()
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with tempfile.TemporaryDirectory() as directory:
+            returned = [(Path(directory) / "generated.png").resolve()]
+            result_file = (Path(directory) / "result.json").resolve()
+            with patch.object(client, "generate", return_value=returned):
+                with patch.object(client.Path, "replace", side_effect=OSError("模拟写入失败")):
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        exit_code = client.main([
+                            "generate",
+                            "--prompt",
+                            "测试",
+                            "--result-file",
+                            str(result_file),
+                        ])
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue().splitlines(), [str(returned[0])])
+        self.assertIn("写入结果回执失败: 模拟写入失败", stderr.getvalue())
+
+    def test_relative_result_receipt_is_rejected_before_generation(self):
+        client = load_public_client()
+        stderr = StringIO()
+
+        with patch.object(client, "generate") as generate:
+            with redirect_stderr(stderr):
+                exit_code = client.main([
+                    "generate",
+                    "--prompt",
+                    "测试",
+                    "--result-file",
+                    "relative-result.json",
+                ])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("结果回执文件必须使用绝对路径", stderr.getvalue())
+        generate.assert_not_called()
+
     def test_generation_prompt_is_passed_through_verbatim(self):
         client = load_public_client()
         prompt = "  保留 $price 与 `code`，不要改写。\n"
@@ -448,10 +645,25 @@ class PackagedSkillTests(unittest.TestCase):
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         for expected in (
-            "命令进程退出且已取得完整 stdout、stderr",
+            "命令仍在运行时继续等待",
+            "已取得完整 stdout、stderr 和退出码",
             "执行状态未知",
             "不得扫描输出目录",
-            "stdout 路径数少于请求数量或退出码非零",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, content)
+
+    def test_skill_uses_result_receipt_when_command_output_is_lost(self):
+        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "`--result-file`",
+            "唯一",
+            "完整 stdout、stderr 和退出码",
+            "读取该回执",
+            "`exit_code`",
+            "不得扫描输出目录",
+            "不得重新执行生图命令",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, content)

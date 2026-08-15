@@ -17,6 +17,7 @@ description: Use when the user asks to generate images with Lumenverba, includin
 - 先从当前 `SKILL.md` 推导技能目录和同级脚本路径；此阶段不得联网。
 - 先确认 `python --version` 可执行且不低于 3.11；否则在 Codex Desktop 调用 `load_workspace_dependencies`，使用其返回的 Python executable。不得读取脚本源码或猜测替代命令。
 - 确定子命令、`--model`、`--size`、`--quality`、数量和 `--output-dir` 后，才为该最终命令申请一次联网权限。
+- 每个最终命令都必须在执行前确定一个本次调用唯一的绝对 JSON 回执路径，并通过 `--result-file` `<绝对路径>` 传给脚本。该路径必须保留在当前对话中，不能依赖命令输出找回。
 - 文生图使用 `generate --prompt`。
 - 参考图生图使用 `edit --prompt --reference <绝对图片路径>`；可重复传入多个 `--reference`。
 - 指定文字生图使用 `text --text --description`，并把文字语言、位置和样式传给 `--language`、`--position`、`--style`。
@@ -36,14 +37,16 @@ description: Use when the user asks to generate images with Lumenverba, includin
 
 ## 结果交付
 
-- 仅在命令进程退出且已取得完整 stdout、stderr 后，才能判断生成数量、批次状态或失败原因。
-- 未取得命令完成输出时，只回复“当前命令的完成输出尚未取得，执行状态未知，正在等待该命令结束。”；不得扫描输出目录、按文件数量或时间戳推断成功数，也不得报告部分失败。
-- 成功图片只以 stdout 中的 PNG 绝对路径为准。命令完成后，stdout 路径数少于请求数量或退出码非零时，才依据 stderr 简要报告部分失败或失败原因。
+- 命令仍在运行时继续等待，不得扫描输出目录、推断生成数量或启动第二次生成。
+- 已取得完整 stdout、stderr 和退出码时，以 stdout 的 PNG 绝对路径为成功结果，并依据 stderr 和退出码报告批次状态。
+- 命令执行通道已结束但没有返回完整 stdout、stderr 和退出码时，使用一次不联网的文件读取操作读取该回执；不得重新执行生图命令。
+- 回执必须是版本 `1` 的完整 JSON，`status` 只能是 `success`、`partial` 或 `error`，`exit_code` 必须是整数，`paths` 必须是本次调用返回的 PNG 绝对路径列表，`errors` 必须是字符串列表。`success` 必须对应退出码 0，`partial` 必须对应非零退出码和非空 `paths`，`error` 必须对应非零退出码和空 `paths`。逐一校验回执指定的路径存在且为 PNG 后，按回执交付成功图片和安全诊断。
+- 回执不存在、无法解析或校验失败时，只报告“命令结果通道和结果回执均不可用，执行状态未知。”；不得扫描输出目录、按文件数量或时间戳推断结果。
 - stdout 中的每一行都是成功 PNG 的绝对路径；逐张用 Markdown 图片链接展示。
 - 若 stderr 包含 `RETRY_NOTICE:` 且 stdout 包含成功 PNG，先展示全部成功图片，再附注“首次失败原因：<安全分类>；自动重试一次后成功。”；不得把该提示当作批次失败。
 - stderr 中的批次项错误只做简要报告；部分失败时仍展示全部成功图片。
 - 只校验返回数量、PNG、绝对路径和批次状态，不得进行视觉检查。
-- 不得自动调整提示词、重新生成、在脚本之外重试创建请求或把单请求多图改为并发单图。
+- 不得自动调整提示词、重新生成、在脚本之外重试创建请求、把单请求多图改为并发单图，或在结果通道丢失时重复执行原命令。
 
 ## 参数选择
 

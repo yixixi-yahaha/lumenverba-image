@@ -18,6 +18,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from queue import Empty, SimpleQueue
 
 
 DEFAULT_BASE_URL = "https://api.lumenverba.cc/v1"
@@ -42,6 +43,7 @@ RETRYABLE_NETWORK_ERROR_CATEGORIES = {
     "代理连接失败",
 }
 RETRY_NOTICE_PREFIX = "RETRY_NOTICE:"
+_RETRY_NOTICES: SimpleQueue[str] = SimpleQueue()
 
 
 class Settings:
@@ -144,6 +146,21 @@ def _network_error_category(reason: object) -> str:
     return "网络连接失败"
 
 
+def _record_retry_notice(category: str) -> None:
+    notice = f"{RETRY_NOTICE_PREFIX} 首次调用失败：{category}；已自动重试 1 次。"
+    _RETRY_NOTICES.put(notice)
+    print(notice, file=sys.stderr)
+
+
+def _take_retry_notices() -> list[str]:
+    notices: list[str] = []
+    while True:
+        try:
+            notices.append(_RETRY_NOTICES.get_nowait())
+        except Empty:
+            return notices
+
+
 def _send(method: str, url: str, headers: dict[str, str], body: bytes = b"") -> tuple[int, dict[str, str], bytes]:
     request = urllib.request.Request(url=url, data=body, headers=headers, method=method)
 
@@ -171,10 +188,7 @@ def _send(method: str, url: str, headers: dict[str, str], body: bytes = b"") -> 
             f"调用图像服务首次发生{first_category}；自动重试后发生{second_category}，生成状态未知。"
         ) from second_error
 
-    print(
-        f"{RETRY_NOTICE_PREFIX} 首次调用失败：{first_category}；已自动重试 1 次。",
-        file=sys.stderr,
-    )
+    _record_retry_notice(first_category)
     return result
 
 
@@ -406,6 +420,7 @@ def _parser() -> argparse.ArgumentParser:
         current.add_argument("--size", choices=sorted(ALLOWED_SIZES))
         current.add_argument("--quality", choices=sorted(ALLOWED_QUALITIES))
         current.add_argument("--output-dir", type=Path, default=Path.cwd() / "output")
+        current.add_argument("--result-file", type=Path)
         current.add_argument("--count", type=int, choices=range(1, MAX_GENERATION_COUNT + 1), default=1)
     subcommands.choices["generate"].add_argument("--prompt", required=True)
     subcommands.choices["edit"].add_argument("--prompt", required=True)
@@ -420,48 +435,108 @@ def _parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--size", choices=sorted(ALLOWED_SIZES))
     batch_parser.add_argument("--quality", choices=sorted(ALLOWED_QUALITIES))
     batch_parser.add_argument("--output-dir", type=Path, default=Path.cwd() / "output")
+    batch_parser.add_argument("--result-file", type=Path)
     batch_parser.add_argument("--prompt", action="append", required=True)
     return parser
+
+
+def _missing_result_errors(paths: list[Path], expected_count: int) -> list[str]:
+    return [
+        f"批次项 {index} 失败: 图像服务未返回该图片。"
+        for index in range(len(paths) + 1, expected_count + 1)
+    ]
+
+
+def _batch_result_data(results: list[BatchItemResult]) -> tuple[list[Path], list[str]]:
+    paths: list[Path] = []
+    errors: list[str] = []
+    for index, result in enumerate(results, start=1):
+        if result.path is not None:
+            paths.append(result.path)
+        else:
+            errors.append(f"批次项 {index} 失败: {result.error or '未知错误'}")
+    return paths, errors
 
 
 def _print_results(paths: list[Path], expected_count: int) -> int:
     for path in paths:
         print(path)
-    if len(paths) == expected_count:
-        return 0
-    for index in range(len(paths) + 1, expected_count + 1):
-        print(f"批次项 {index} 失败: 图像服务未返回该图片。", file=sys.stderr)
-    return 1
+    errors = _missing_result_errors(paths, expected_count)
+    for error in errors:
+        print(error, file=sys.stderr)
+    return 0 if len(paths) == expected_count else 1
 
 
 def _print_batch_results(results: list[BatchItemResult]) -> int:
-    failed = False
-    for index, result in enumerate(results, start=1):
-        if result.path is not None:
-            print(result.path)
-        else:
-            failed = True
-            print(f"批次项 {index} 失败: {result.error or '未知错误'}", file=sys.stderr)
-    return 1 if failed else 0
+    paths, errors = _batch_result_data(results)
+    for path in paths:
+        print(path)
+    for error in errors:
+        print(error, file=sys.stderr)
+    return 1 if errors else 0
+
+
+def _write_result_receipt(
+    result_file: Path | None,
+    exit_code: int,
+    paths: list[Path],
+    errors: list[str],
+) -> None:
+    if result_file is None:
+        return
+    if not result_file.is_absolute():
+        raise ValueError("结果回执文件必须使用绝对路径。")
+    status = "success" if exit_code == 0 else "partial" if paths else "error"
+    payload = {
+        "version": 1,
+        "status": status,
+        "exit_code": exit_code,
+        "paths": [str(path) for path in paths],
+        "errors": errors,
+    }
+    result_file.parent.mkdir(parents=True, exist_ok=True)
+    temporary = result_file.with_name(f".{result_file.name}.{secrets.token_hex(4)}.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(result_file)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    _take_retry_notices()
+    if arguments.result_file is not None and not arguments.result_file.is_absolute():
+        print("结果回执文件必须使用绝对路径。", file=sys.stderr)
+        return 1
+    paths: list[Path] = []
+    errors: list[str] = []
     try:
         if arguments.command == "batch":
             results = generate_batch(arguments.prompt, arguments.model, arguments.size, arguments.quality, arguments.output_dir)
-            return _print_batch_results(results)
-        if arguments.command == "generate":
-            paths = generate(arguments.prompt, arguments.model, arguments.size, arguments.quality, arguments.count, arguments.output_dir)
-        elif arguments.command == "edit":
-            paths = edit(arguments.prompt, arguments.reference, arguments.model, arguments.size, arguments.quality, arguments.count, arguments.output_dir)
+            paths, errors = _batch_result_data(results)
+            errors = _take_retry_notices() + errors
+            exit_code = _print_batch_results(results)
         else:
-            prompt = build_text_prompt(arguments.text, arguments.description, arguments.language, arguments.position, arguments.style)
-            paths = generate(prompt, arguments.model, arguments.size, arguments.quality, arguments.count, arguments.output_dir)
+            if arguments.command == "generate":
+                paths = generate(arguments.prompt, arguments.model, arguments.size, arguments.quality, arguments.count, arguments.output_dir)
+            elif arguments.command == "edit":
+                paths = edit(arguments.prompt, arguments.reference, arguments.model, arguments.size, arguments.quality, arguments.count, arguments.output_dir)
+            else:
+                prompt = build_text_prompt(arguments.text, arguments.description, arguments.language, arguments.position, arguments.style)
+                paths = generate(prompt, arguments.model, arguments.size, arguments.quality, arguments.count, arguments.output_dir)
+            errors = _take_retry_notices() + _missing_result_errors(paths, arguments.count)
+            exit_code = _print_results(paths, arguments.count)
     except (OSError, RuntimeError, ValueError) as error:
+        errors = _take_retry_notices() + [str(error)]
         print(str(error), file=sys.stderr)
+        exit_code = 1
+    try:
+        _write_result_receipt(arguments.result_file, exit_code, paths, errors)
+    except (OSError, ValueError) as error:
+        print(f"写入结果回执失败: {error}", file=sys.stderr)
         return 1
-    return _print_results(paths, arguments.count)
+    return exit_code
 
 
 if __name__ == "__main__":
