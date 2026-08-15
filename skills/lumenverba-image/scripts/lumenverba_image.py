@@ -175,9 +175,13 @@ def _send(method: str, url: str, headers: dict[str, str], body: bytes = b"") -> 
         return send_once()
     except urllib.error.URLError as first_error:
         first_category = _network_error_category(first_error.reason)
+        if method.upper() != "GET":
+            raise RuntimeError(
+                f"调用图像服务时发生{first_category}，生成状态未知，创建请求未自动重试。"
+            ) from first_error
         if first_category not in RETRYABLE_NETWORK_ERROR_CATEGORIES:
             raise RuntimeError(
-                f"调用图像服务时发生{first_category}，生成状态未知，未自动重试。"
+                f"读取图像服务时发生{first_category}，读取失败，未自动重试。"
             ) from first_error
 
     try:
@@ -185,7 +189,7 @@ def _send(method: str, url: str, headers: dict[str, str], body: bytes = b"") -> 
     except urllib.error.URLError as second_error:
         second_category = _network_error_category(second_error.reason)
         raise RuntimeError(
-            f"调用图像服务首次发生{first_category}；自动重试后发生{second_category}，生成状态未知。"
+            f"读取图像服务首次发生{first_category}；自动重试后发生{second_category}，读取失败。"
         ) from second_error
 
     _record_retry_notice(first_category)
@@ -283,11 +287,32 @@ def save_response_image(body: bytes, content_type: str, output_dir: Path, settin
 
 def _task_location(headers: dict[str, str], settings: Settings) -> str:
     location = next((value for key, value in headers.items() if key.lower() == "location"), None)
-    if not location:
+    if not isinstance(location, str) or not location.strip():
         raise RuntimeError("图像服务返回了异步任务，但没有任务地址。")
-    task_url = urllib.parse.urljoin(f"{settings.base_url}/", location)
-    parsed = urllib.parse.urlsplit(task_url)
-    if parsed.scheme != "https" or not parsed.hostname:
+    location = location.strip()
+    if location.startswith("//"):
+        raise RuntimeError("图像服务返回了不安全的任务地址。")
+
+    task_url = urllib.parse.urljoin(f"{settings.base_url.rstrip('/')}/", location)
+    try:
+        parsed = urllib.parse.urlsplit(task_url)
+        base = urllib.parse.urlsplit(settings.base_url)
+        task_port = parsed.port or 443
+        base_port = base.port or 443
+    except ValueError as error:
+        raise RuntimeError("图像服务返回了不安全的任务地址。") from error
+
+    namespace = f"{base.path.rstrip('/')}/"
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != base.hostname
+        or task_port != 443
+        or base_port != 443
+        or parsed.username is not None
+        or parsed.password is not None
+        or bool(parsed.fragment)
+        or not parsed.path.startswith(namespace)
+    ):
         raise RuntimeError("图像服务返回了不安全的任务地址。")
     return task_url
 

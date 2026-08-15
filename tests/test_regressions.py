@@ -27,11 +27,11 @@ def load_client():
     return module
 
 
-def mock_json_response(payload):
+def mock_json_response(payload, status=200, headers=None):
     response = MagicMock()
     response.__enter__.return_value = response
-    response.status = 200
-    response.headers = {"Content-Type": "application/json"}
+    response.status = status
+    response.headers = headers or {"Content-Type": "application/json"}
     response.read.return_value = json.dumps(payload).encode("utf-8")
     return response
 
@@ -97,7 +97,7 @@ class RetryRegressionTests(unittest.TestCase):
 
         with patch.object(client.urllib.request, "urlopen", side_effect=failures) as urlopen:
             with redirect_stderr(StringIO()):
-                client._send("POST", "https://api.lumenverba.cc/v1/images/generations", {"X-Test": "value"}, b"payload")
+                client._send("GET", "https://api.lumenverba.cc/v1/tasks/task-1", {"X-Test": "value"})
 
         first_call, second_call = urlopen.call_args_list
         first_request = first_call.args[0]
@@ -111,7 +111,8 @@ class RetryRegressionTests(unittest.TestCase):
     def test_real_retry_notice_is_written_to_the_receipt(self):
         client = load_client()
         encoded = base64.b64encode(PNG_BYTES).decode("ascii")
-        response = mock_json_response({"data": [{"b64_json": encoded}]})
+        accepted = mock_json_response({}, status=202, headers={"Location": "/v1/tasks/task-1"})
+        completed = mock_json_response({"data": [{"b64_json": encoded}]})
         first_error = client.urllib.error.URLError(client.ssl.SSLError("private TLS detail"))
         stdout = StringIO()
         stderr = StringIO()
@@ -119,7 +120,7 @@ class RetryRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result_file = (Path(directory) / "result.json").resolve()
             with patch.dict(os.environ, {"LUMENVERBA_API_KEY": "test-key"}, clear=True):
-                with patch.object(client.urllib.request, "urlopen", side_effect=[first_error, response]):
+                with patch.object(client.urllib.request, "urlopen", side_effect=[accepted, first_error, completed]):
                     with redirect_stdout(stdout), redirect_stderr(stderr):
                         exit_code = client.main([
                             "generate",

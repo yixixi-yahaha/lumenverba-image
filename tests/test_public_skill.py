@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,14 +61,50 @@ class PortableClientTests(unittest.TestCase):
         with patch.dict(os.environ, {"LUMENVERBA_API_KEY": "test-key"}, clear=True):
             self.assertEqual(client.Settings.from_environment().base_url, "https://api.lumenverba.cc/v1")
 
-    def test_network_error_reports_a_safe_category_and_network_recovery(self):
+    def test_creation_network_error_is_not_retried(self):
         client = load_public_client()
 
         with patch.object(client.urllib.request, "urlopen", side_effect=client.urllib.error.URLError("TLS EOF")) as urlopen:
-            with self.assertRaisesRegex(RuntimeError, "首次发生TLS 连接失败.*自动重试后发生TLS 连接失败.*生成状态未知"):
+            with self.assertRaisesRegex(RuntimeError, "TLS 连接失败.*生成状态未知.*未自动重试"):
                 client._send("POST", "https://api.lumenverba.cc/v1/images/generations", {})
 
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_read_network_error_retries_once(self):
+        client = load_public_client()
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.status = 200
+        response.headers = {"Content-Type": "application/json"}
+        response.read.return_value = b"{}"
+        first_error = client.urllib.error.URLError(client.ssl.SSLError("private TLS detail"))
+        stderr = StringIO()
+
+        with patch.object(client.urllib.request, "urlopen", side_effect=[first_error, response]) as urlopen:
+            with redirect_stderr(stderr):
+                status, _, body = client._send(
+                    "GET",
+                    "https://api.lumenverba.cc/v1/tasks/task-1",
+                    {},
+                )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"{}")
         self.assertEqual(urlopen.call_count, 2)
+        self.assertIn("RETRY_NOTICE:", stderr.getvalue())
+
+    def test_read_timeout_is_not_retried(self):
+        client = load_public_client()
+
+        with patch.object(
+            client.urllib.request,
+            "urlopen",
+            side_effect=client.urllib.error.URLError(TimeoutError("private timeout")),
+        ) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "网络连接超时.*未自动重试"):
+                client._send("GET", "https://api.lumenverba.cc/v1/tasks/task-1", {})
+
+        self.assertEqual(urlopen.call_count, 1)
 
     def test_network_error_categories_do_not_expose_raw_error_text(self):
         client = load_public_client()
@@ -309,6 +345,33 @@ class PortableClientTests(unittest.TestCase):
                         "application/json",
                         client.Settings("test-key"),
                         Path(directory),
+                    )
+
+    def test_accepted_task_rejects_external_https_location(self):
+        client = load_public_client()
+
+        with self.assertRaisesRegex(RuntimeError, "不安全的任务地址"):
+            client._task_location(
+                {"Location": "https://attacker.example/v1/tasks/task-1"},
+                client.Settings("test-key"),
+            )
+
+    def test_task_location_rejects_untrusted_url_shapes(self):
+        client = load_public_client()
+        invalid_locations = (
+            "//api.lumenverba.cc/v1/tasks/task-1",
+            "https://api.lumenverba.cc:444/v1/tasks/task-1",
+            "https://user@api.lumenverba.cc/v1/tasks/task-1",
+            "https://api.lumenverba.cc/v1/tasks/task-1#fragment",
+            "https://api.lumenverba.cc/private/task-1",
+        )
+
+        for location in invalid_locations:
+            with self.subTest(location=location):
+                with self.assertRaisesRegex(RuntimeError, "不安全的任务地址"):
+                    client._task_location(
+                        {"Location": location},
+                        client.Settings("test-key"),
                     )
 
     def test_rejects_non_https_generated_image_url(self):

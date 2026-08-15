@@ -97,7 +97,7 @@ def test_task_location_rejects_untrusted_url_shapes(self):
 Run:
 
 ```powershell
-python tests/test_public_skill.py PortableClientTests.test_accepted_task_rejects_external_https_location PortableClientTests.test_task_location_rejects_untrusted_url_shapes -v
+python -m unittest discover -s tests -p "test_public_skill.py" -v
 ```
 
 Expected: failures because external HTTPS and other untrusted shapes are currently accepted.
@@ -111,7 +111,7 @@ Update `_task_location()` to reject protocol-relative values before `urljoin`, p
 Run:
 
 ```powershell
-python tests/test_public_skill.py PortableClientTests.test_accepted_task_is_polled_until_png_is_ready PortableClientTests.test_accepted_task_rejects_an_insecure_location PortableClientTests.test_accepted_task_rejects_external_https_location PortableClientTests.test_task_location_rejects_untrusted_url_shapes -v
+python -m unittest discover -s tests -p "test_public_skill.py" -v
 ```
 
 Expected: all pass.
@@ -166,7 +166,7 @@ def test_read_request_retries_one_safe_network_failure(self):
 Run:
 
 ```powershell
-python tests/test_public_skill.py PortableClientTests.test_creation_request_network_error_is_not_retried PortableClientTests.test_read_request_retries_one_safe_network_failure -v
+python -m unittest discover -s tests -p "test_public_skill.py" -v
 ```
 
 Expected: the creation test fails because POST currently retries.
@@ -184,8 +184,8 @@ Change the result-receipt regression to return HTTP 202 for the creation call, f
 Run:
 
 ```powershell
-python tests/test_public_skill.py PortableClientTests.test_creation_request_network_error_is_not_retried PortableClientTests.test_read_request_retries_one_safe_network_failure -v
-python tests/test_regressions.py RetryRegressionTests -v
+python -m unittest discover -s tests -p "test_public_skill.py" -v
+python -m unittest discover -s tests -p "test_regressions.py" -v
 ```
 
 Expected: all pass.
@@ -218,7 +218,7 @@ Update the version assertions to `v1.2.5`, require README and skill text describ
 Run:
 
 ```powershell
-python tests/test_public_skill.py PackagedSkillTests -v
+python -m unittest discover -s tests -p "test_public_skill.py" -v
 ```
 
 Expected: failures for v1.2.5, retry wording, and the missing license.
@@ -232,7 +232,7 @@ Point README installation examples to `v1.2.5`; describe that creation requests 
 Run:
 
 ```powershell
-python tests/test_public_skill.py PackagedSkillTests -v
+python -m unittest discover -s tests -p "test_public_skill.py" -v
 ```
 
 Expected: all pass.
