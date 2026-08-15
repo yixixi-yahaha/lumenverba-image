@@ -11,16 +11,16 @@
 新建一个 Codex 对话，发送以下内容：
 
 ```text
-请从 https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.2.0/skills/lumenverba-image 安装 lumenverba-image 技能（当前最新稳定版 v1.2.0）。
+请从 https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.2.1/skills/lumenverba-image 安装 lumenverba-image 技能（当前最新稳定版 v1.2.1）。
 ```
 
 ### 使用命令安装
 
 ```powershell
-npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.2.0/skills/lumenverba-image" -g -y
+npx.cmd skills add "https://github.com/yixixi-yahaha/lumenverba-image/tree/v1.2.1/skills/lumenverba-image" -g -y
 ```
 
-当前最新稳定版为 `v1.2.0`。安装命令固定到发布标签；更新时请改用新的发布标签 URL，而不要继续使用旧版本链接。安装完成后，重新打开 Codex。技能会在文生图、参考图生图、海报、角色图、插画或包含指定清晰文字的图片请求中自动启用。
+当前最新稳定版为 `v1.2.1`。安装命令固定到发布标签；更新时请改用新的发布标签 URL，而不要继续使用旧版本链接。安装完成后，重新打开 Codex。技能会在文生图、参考图生图、海报、角色图、插画或包含指定清晰文字的图片请求中自动启用。
 
 ## 首次配置密钥
 
@@ -93,7 +93,7 @@ python "skills/lumenverba-image/scripts/lumenverba_image.py" generate --prompt "
 python "skills/lumenverba-image/scripts/lumenverba_image.py" batch --prompt "第一张" --prompt "第二张"
 ```
 
-全部成功时退出码为 `0`。部分失败时已成功图片仍保留并输出，失败批次项写入标准错误，退出码为 `1`。创建请求不会自动重试或切换生成方式。
+全部成功时退出码为 `0`。部分失败时已成功图片仍保留并输出，失败批次项写入标准错误，退出码为 `1`。脚本会对 DNS、TLS、连接被拒绝和代理等安全连接错误自动重试 1 次；网络连接超时、连接中途关闭、生成状态未知和其他错误不自动重试。若重试后成功生成图片，Codex 会在展示图片后附带首次失败原因。
 
 ## 维护者发布验证
 

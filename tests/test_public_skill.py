@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,14 +61,57 @@ class PortableClientTests(unittest.TestCase):
         with patch.dict(os.environ, {"LUMENVERBA_API_KEY": "test-key"}, clear=True):
             self.assertEqual(client.Settings.from_environment().base_url, "https://api.lumenverba.cc/v1")
 
-    def test_network_error_reports_a_safe_category_and_network_recovery(self):
+    def test_retryable_network_error_is_retried_once_and_reports_a_safe_notice(self):
+        client = load_public_client()
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.status = 200
+        response.headers = {}
+        response.read.return_value = b"{}"
+        stderr = StringIO()
+
+        failures = [
+            client.urllib.error.URLError(client.ssl.SSLError("private TLS detail")),
+            response,
+        ]
+        with patch.object(client.urllib.request, "urlopen", side_effect=failures) as urlopen:
+            with redirect_stderr(stderr):
+                status, headers, body = client._send(
+                    "POST",
+                    "https://api.lumenverba.cc/v1/images/generations",
+                    {},
+                    b"payload",
+                )
+
+        self.assertEqual((status, headers, body), (200, {}, b"{}"))
+        self.assertEqual(urlopen.call_count, 2)
+        self.assertIn("RETRY_NOTICE: 首次调用失败：TLS 连接失败；已自动重试 1 次。", stderr.getvalue())
+        self.assertNotIn("private TLS detail", stderr.getvalue())
+
+    def test_timeout_is_not_retried(self):
         client = load_public_client()
 
-        with patch.object(client.urllib.request, "urlopen", side_effect=client.urllib.error.URLError("TLS EOF")) as urlopen:
-            with self.assertRaisesRegex(RuntimeError, "TLS 连接失败.*生成状态未知.*回复“允许联网”.*重新发送该请求"):
+        error = client.urllib.error.URLError(TimeoutError("private timeout"))
+        with patch.object(client.urllib.request, "urlopen", side_effect=error) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "网络连接超时.*生成状态未知.*未自动重试"):
                 client._send("POST", "https://api.lumenverba.cc/v1/images/generations", {})
 
         self.assertEqual(urlopen.call_count, 1)
+
+    def test_second_network_failure_is_reported_without_a_third_attempt(self):
+        client = load_public_client()
+
+        failures = [
+            client.urllib.error.URLError(client.socket.gaierror(-2, "private host")),
+            client.urllib.error.URLError("proxy credentials unavailable"),
+        ]
+        with patch.object(client.urllib.request, "urlopen", side_effect=failures) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "首次发生DNS 解析失败.*自动重试后发生代理连接失败.*生成状态未知") as raised:
+                client._send("POST", "https://api.lumenverba.cc/v1/images/generations", {})
+
+        self.assertEqual(urlopen.call_count, 2)
+        self.assertNotIn("private host", str(raised.exception))
+        self.assertNotIn("proxy credentials", str(raised.exception))
 
     def test_network_error_categories_do_not_expose_raw_error_text(self):
         client = load_public_client()
@@ -343,8 +386,8 @@ class PackagedSkillTests(unittest.TestCase):
         for expected in (
             "--output-dir",
             "load_workspace_dependencies",
-            "/tree/v1.2.0/skills/lumenverba-image",
-            "当前最新稳定版 v1.2.0",
+            "/tree/v1.2.1/skills/lumenverba-image",
+            "当前最新稳定版 v1.2.1",
         ):
             self.assertIn(expected, readme + skill)
 
@@ -385,7 +428,9 @@ class PackagedSkillTests(unittest.TestCase):
             "不得进行视觉检查",
             "成功图片",
             "批次项",
-            "不得自动重试",
+            "自动重试 1 次",
+            "RETRY_NOTICE:",
+            "首次失败原因",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, content)
@@ -399,6 +444,18 @@ class PackagedSkillTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, content)
 
+    def test_skill_waits_for_completed_command_output_before_reporting_results(self):
+        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "命令进程退出且已取得完整 stdout、stderr",
+            "执行状态未知",
+            "不得扫描输出目录",
+            "stdout 路径数少于请求数量或退出码非零",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, content)
+
     def test_readme_documents_batch_commands_and_limit(self):
         content = (ROOT / "README.md").read_text(encoding="utf-8")
         for expected in (
@@ -408,20 +465,33 @@ class PackagedSkillTests(unittest.TestCase):
             "2 至 4 个 `--prompt`",
             "并发生成上限为 4 张",
             "部分失败",
+            "安全连接错误自动重试 1 次",
+            "首次失败原因",
+            "网络连接超时、连接中途关闭、生成状态未知和其他错误不自动重试",
         ):
             self.assertIn(expected, content)
 
-    def test_skill_documents_network_recovery_after_an_unknown_state(self):
+    def test_skill_documents_safe_retry_boundary_and_delivery_notice(self):
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         for expected in (
+            "DNS 解析失败",
+            "TLS 连接失败",
+            "连接被拒绝",
+            "代理连接失败",
+            "自动重试 1 次",
+            "网络连接超时",
             "生成状态未知",
-            "回复“允许联网”",
-            "重新发送该请求",
-            "不得自动重试",
+            "RETRY_NOTICE:",
+            "首次失败原因",
+            "脚本之外",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, content)
+
+        for forbidden in ("回复“允许联网”", "重新发送该请求"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, content)
 
     def test_skill_documents_secure_first_use_and_all_modes(self):
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")

@@ -35,6 +35,13 @@ MAX_RESPONSE_BYTES = MAX_IMAGE_BYTES * MAX_GENERATION_COUNT * 4 // 3 + 64 * 1024
 TIMEOUT_SECONDS = 600
 MAX_TASK_POLL_ATTEMPTS = 60
 TASK_POLL_INTERVAL_SECONDS = 1
+RETRYABLE_NETWORK_ERROR_CATEGORIES = {
+    "DNS 解析失败",
+    "TLS 连接失败",
+    "连接被拒绝",
+    "代理连接失败",
+}
+RETRY_NOTICE_PREFIX = "RETRY_NOTICE:"
 
 
 class Settings:
@@ -139,14 +146,36 @@ def _network_error_category(reason: object) -> str:
 
 def _send(method: str, url: str, headers: dict[str, str], body: bytes = b"") -> tuple[int, dict[str, str], bytes]:
     request = urllib.request.Request(url=url, data=body, headers=headers, method=method)
+
+    def send_once() -> tuple[int, dict[str, str], bytes]:
+        try:
+            with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+                return response.status, dict(response.headers.items()), response.read(MAX_RESPONSE_BYTES + 1)
+        except urllib.error.HTTPError as error:
+            return error.code, dict(error.headers.items()), error.read(MAX_RESPONSE_BYTES + 1)
+
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-            return response.status, dict(response.headers.items()), response.read(MAX_RESPONSE_BYTES + 1)
-    except urllib.error.HTTPError as error:
-        return error.code, dict(error.headers.items()), error.read(MAX_RESPONSE_BYTES + 1)
-    except urllib.error.URLError as error:
-        category = _network_error_category(error.reason)
-        raise RuntimeError(f"调用图像服务时发生{category}，生成状态未知，请勿自动重试。请回复“允许联网”，然后重新发送该请求。") from error
+        return send_once()
+    except urllib.error.URLError as first_error:
+        first_category = _network_error_category(first_error.reason)
+        if first_category not in RETRYABLE_NETWORK_ERROR_CATEGORIES:
+            raise RuntimeError(
+                f"调用图像服务时发生{first_category}，生成状态未知，未自动重试。"
+            ) from first_error
+
+    try:
+        result = send_once()
+    except urllib.error.URLError as second_error:
+        second_category = _network_error_category(second_error.reason)
+        raise RuntimeError(
+            f"调用图像服务首次发生{first_category}；自动重试后发生{second_category}，生成状态未知。"
+        ) from second_error
+
+    print(
+        f"{RETRY_NOTICE_PREFIX} 首次调用失败：{first_category}；已自动重试 1 次。",
+        file=sys.stderr,
+    )
+    return result
 
 
 def _extract_images(payload: object) -> list[dict[str, object]]:
