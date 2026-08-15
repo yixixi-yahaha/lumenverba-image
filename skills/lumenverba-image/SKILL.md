@@ -36,6 +36,9 @@ description: Use when the user asks to generate images with Lumenverba, includin
 
 ## 结果交付
 
+- 仅在命令进程退出且已取得完整 stdout、stderr 后，才能判断生成数量、批次状态或失败原因。
+- 未取得命令完成输出时，只回复“当前命令的完成输出尚未取得，执行状态未知，正在等待该命令结束。”；不得扫描输出目录、按文件数量或时间戳推断成功数，也不得报告部分失败。
+- 成功图片只以 stdout 中的 PNG 绝对路径为准。命令完成后，stdout 路径数少于请求数量或退出码非零时，才依据 stderr 简要报告部分失败或失败原因。
 - stdout 中的每一行都是成功 PNG 的绝对路径；逐张用 Markdown 图片链接展示。
 - 若 stderr 包含 `RETRY_NOTICE:` 且 stdout 包含成功 PNG，先展示全部成功图片，再附注“首次失败原因：<安全分类>；自动重试一次后成功。”；不得把该提示当作批次失败。
 - stderr 中的批次项错误只做简要报告；部分失败时仍展示全部成功图片。

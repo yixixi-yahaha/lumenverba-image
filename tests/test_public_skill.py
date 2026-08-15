@@ -444,6 +444,18 @@ class PackagedSkillTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, content)
 
+    def test_skill_waits_for_completed_command_output_before_reporting_results(self):
+        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "命令进程退出且已取得完整 stdout、stderr",
+            "执行状态未知",
+            "不得扫描输出目录",
+            "stdout 路径数少于请求数量或退出码非零",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, content)
+
     def test_readme_documents_batch_commands_and_limit(self):
         content = (ROOT / "README.md").read_text(encoding="utf-8")
         for expected in (
