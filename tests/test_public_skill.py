@@ -791,11 +791,46 @@ class PackagedSkillTests(unittest.TestCase):
             "edit",
             "text",
             "gpt-image-2",
-            "1536x1024",
-            "standard",
+            "auto",
+            "medium",
             "Read-Host",
             "AsSecureString",
             "SetEnvironmentVariable",
             "完全退出并重新打开 Codex",
         ):
             self.assertIn(expected, content)
+
+    def test_documentation_declares_flexible_gpt_image_2_sizes(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for content in (readme, skill):
+            for expected in (
+                "gpt-image-2",
+                "auto",
+                "medium",
+                "3840",
+                "16",
+                "3:1",
+                "655,360",
+                "8,294,400",
+                "3,686,400",
+                "https://developers.openai.com/api/docs/guides/image-generation#size-and-quality-options",
+            ):
+                with self.subTest(expected=expected):
+                    self.assertIn(expected, content)
+            self.assertNotIn("`standard`", content)
+            self.assertNotIn("`gpt-image-1`", content)
+            self.assertNotIn("`gpt-image-1.5`", content)
+
+        for preset in (
+            "1024x1024",
+            "1536x1024",
+            "1024x1536",
+            "2048x2048",
+            "2048x1152",
+            "3840x2160",
+            "2160x3840",
+        ):
+            with self.subTest(preset=preset):
+                self.assertIn(preset, skill)

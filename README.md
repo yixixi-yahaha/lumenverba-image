@@ -64,7 +64,9 @@ Remove-Variable keyStillExists
 - 参考图生图：使用一张或多张本地参考图片生成新图。
 - 文字生图：要求图中完整呈现指定、清晰可读的文字。
 
-默认使用模型 `gpt-image-2`、尺寸 `1536x1024` 和质量 `standard`。可用模型为 `gpt-image-1`、`gpt-image-1.5`、`gpt-image-2`；可用尺寸为 `1024x1024`、`1536x1024`、`1024x1536`；可用质量为 `low`、`standard`、`high`。用户显式指定的参数始终优先。
+默认使用模型 `gpt-image-2`、尺寸 `auto` 和质量 `medium`。这是唯一支持的模型；指定其他模型时客户端会在联网前拒绝。质量可选 `low`、`medium`、`high`、`auto`，质量控制渲染质量、速度和成本，不代表输出分辨率。
+
+尺寸可使用 `auto` 或自定义 `WIDTHxHEIGHT`。自定义尺寸的最长边不得超过 `3840px`，两边必须是 `16px` 的倍数，长短边之比不得超过 `3:1`，总像素必须在 `655,360` 到 `8,294,400` 之间。显式尺寸总像素超过 `3,686,400` 时属于官方标记的实验范围，客户端会警告但仍允许执行。约束来源见 [OpenAI Image Generation 文档](https://developers.openai.com/api/docs/guides/image-generation#size-and-quality-options)。用户显式指定的合法参数始终优先。
 
 ## 批量生成
 
