@@ -337,6 +337,50 @@ class PortableClientTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "生成数量必须在 1 到 10 之间"):
                     client.build_generation_request("同一提示词", count=invalid)
 
+    def test_experimental_size_warns_once_without_changing_success_receipt(self):
+        client = load_public_client()
+        returned = [Path("C:/generated/experimental.png")]
+        stderr = StringIO()
+
+        with tempfile.TemporaryDirectory() as directory:
+            result_file = Path(directory) / "result.json"
+            with patch.object(client, "generate", return_value=returned):
+                with redirect_stdout(StringIO()), redirect_stderr(stderr):
+                    exit_code = client.main([
+                        "generate",
+                        "--prompt",
+                        "测试",
+                        "--size",
+                        "2048x2048",
+                        "--result-file",
+                        str(result_file),
+                    ])
+            receipt = json.loads(result_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue().count("WARNING: 实验分辨率"), 1)
+        self.assertEqual(receipt["status"], "success")
+        self.assertEqual(receipt["errors"], [])
+
+    def test_auto_and_regular_sizes_do_not_warn(self):
+        client = load_public_client()
+        returned = [Path("C:/generated/regular.png")]
+
+        for size in ("auto", "2048x1152"):
+            stderr = StringIO()
+            with self.subTest(size=size):
+                with patch.object(client, "generate", return_value=returned):
+                    with redirect_stdout(StringIO()), redirect_stderr(stderr):
+                        exit_code = client.main([
+                            "generate",
+                            "--prompt",
+                            "测试",
+                            "--size",
+                            size,
+                        ])
+                self.assertEqual(exit_code, 0)
+                self.assertNotIn("实验分辨率", stderr.getvalue())
+
     def test_generation_prompt_is_passed_through_verbatim(self):
         client = load_public_client()
         prompt = "  保留 $price 与 `code`，不要改写。\n"

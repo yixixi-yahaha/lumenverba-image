@@ -31,6 +31,7 @@ ALLOWED_MODELS = {"gpt-image-2"}
 ALLOWED_QUALITIES = {"auto", "high", "low", "medium"}
 MIN_OUTPUT_PIXELS = 655_360
 MAX_OUTPUT_PIXELS = 8_294_400
+EXPERIMENTAL_OUTPUT_PIXELS = 2560 * 1440
 MAX_OUTPUT_EDGE = 3840
 OUTPUT_EDGE_MULTIPLE = 16
 MAX_OUTPUT_ASPECT_RATIO = 3
@@ -118,6 +119,14 @@ def _select_size(value: str | None) -> str:
     if pixels > MAX_OUTPUT_PIXELS:
         raise ValueError("尺寸总像素不能超过 8,294,400。")
     return selected
+
+
+def _is_experimental_size(value: str | None) -> bool:
+    selected = _select_size(value)
+    if selected == "auto":
+        return False
+    width, height = _size_dimensions(selected)
+    return width * height > EXPERIMENTAL_OUTPUT_PIXELS
 
 
 def _select_count(count: int) -> int:
@@ -615,6 +624,11 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.result_file is not None and not arguments.result_file.is_absolute():
         print("结果回执文件必须使用绝对路径。", file=sys.stderr)
         return 1
+    if _is_experimental_size(arguments.size):
+        print(
+            "WARNING: 实验分辨率的总像素超过 3,686,400，官方标记为 experimental；请求将继续执行。",
+            file=sys.stderr,
+        )
     paths: list[Path] = []
     errors: list[str] = []
     try:
