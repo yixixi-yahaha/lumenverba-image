@@ -658,13 +658,15 @@ Run:
 ```powershell
 $sourceRepo = (git rev-parse --show-toplevel).Trim()
 $expectedHead = (git rev-parse HEAD).Trim()
+$expectedOriginMain = (git rev-parse refs/remotes/origin/main).Trim()
+$expectedCandidate = (git rev-parse refs/remotes/origin/codex/gpt-image-2-flexible-sizes).Trim()
 $expectedStable = (git rev-parse 'v1.2.5^{}').Trim()
 $expectedRc = (git rev-parse 'v1.2.6-rc.1^{}').Trim()
 $drillRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('lumenverba-handoff-drill-' + [guid]::NewGuid().ToString('N'))
 Write-Host "Drill clone: $drillRoot"
 ```
 
-Expected: `$expectedStable` is `02b1731e5b5aa3e19e92a63b4a7d1e12d4f50703`, `$expectedRc` is `d88ba22109b5fdaa5632154d3f2e15752985218a`, and `$drillRoot` is a new uniquely named system-temporary path. Do not inspect `LUMENVERBA_API_KEY`.
+Expected: `$expectedOriginMain` and `$expectedStable` are `02b1731e5b5aa3e19e92a63b4a7d1e12d4f50703`; `$expectedCandidate` and `$expectedRc` are `d88ba22109b5fdaa5632154d3f2e15752985218a`; and `$drillRoot` is a new uniquely named system-temporary path. Do not inspect `LUMENVERBA_API_KEY`.
 
 - [ ] **Step 3: Create a physically independent local clone with no network**
 
@@ -674,10 +676,12 @@ Continue in the same PowerShell session:
 git clone --no-local --branch codex/agent-maintenance-handoff-design $sourceRepo $drillRoot
 if ($LASTEXITCODE -ne 0) { throw 'Offline drill clone failed.' }
 Set-Location -LiteralPath $drillRoot
+git fetch --no-tags $sourceRepo '+refs/remotes/origin/main:refs/remotes/origin/main' '+refs/remotes/origin/codex/gpt-image-2-flexible-sizes:refs/remotes/origin/codex/gpt-image-2-flexible-sizes'
+if ($LASTEXITCODE -ne 0) { throw 'Offline authority-ref restoration failed.' }
 git remote set-url origin https://github.com/yixixi-yahaha/lumenverba-image
 ```
 
-Expected: clone succeeds without contacting GitHub, and `origin` is recorded as the authority URL only after cloning. No fetch or push occurs.
+Expected: clone and the explicit local fetch both succeed without contacting GitHub. The local fetch replaces the clone's inherited `origin/main` and candidate remote-tracking refs with the source repository's verified `refs/remotes/origin/*` values; only then is `origin` recorded as the GitHub authority URL. No network fetch or push occurs.
 
 - [ ] **Step 4: Verify refs, documents, and isolation inside the clone**
 
@@ -685,9 +689,13 @@ Continue in the drill clone:
 
 ```powershell
 $actualHead = (git rev-parse HEAD).Trim()
+$actualOriginMain = (git rev-parse refs/remotes/origin/main).Trim()
+$actualCandidate = (git rev-parse refs/remotes/origin/codex/gpt-image-2-flexible-sizes).Trim()
 $actualStable = (git rev-parse 'v1.2.5^{}').Trim()
 $actualRc = (git rev-parse 'v1.2.6-rc.1^{}').Trim()
 if ($actualHead -ne $expectedHead) { throw 'Drill HEAD differs from source HEAD.' }
+if ($actualOriginMain -ne $expectedOriginMain) { throw 'Authority origin/main differs.' }
+if ($actualCandidate -ne $expectedCandidate) { throw 'Candidate remote-tracking ref differs.' }
 if ($actualStable -ne $expectedStable) { throw 'Stable tag target differs.' }
 if ($actualRc -ne $expectedRc) { throw 'RC tag target differs.' }
 @('AGENTS.md', 'CONTEXT.md', 'docs/maintenance/HANDOFF.md', 'docs/maintenance/VERIFICATION.md') | ForEach-Object {
@@ -699,7 +707,7 @@ if ((git remote get-url origin).Trim() -ne 'https://github.com/yixixi-yahaha/lum
 git status --short --branch
 ```
 
-Expected: all comparisons pass, all four onboarding files exist, `origin` is the GitHub authority URL, and the drill clone is clean.
+Expected: all comparisons pass, `origin/main` matches `v1.2.5`, the candidate remote-tracking ref matches `v1.2.6-rc.1`, all four onboarding files exist, `origin` is the GitHub authority URL, and the drill clone is clean.
 
 - [ ] **Step 5: Run the offline gate from the fresh clone**
 
@@ -722,7 +730,7 @@ Expected: every command exits 0, both discovery commands execute the same nonzer
 
 - [ ] **Step 6: Retain the drill clone and report the handoff evidence**
 
-Do not delete `$drillRoot`. Report its exact path, the source and drill `HEAD`, stable and RC tag targets, test counts, command results, and the fact that no live API, fetch, push, PR change, merge, tag creation/movement, or Release occurred. Destructive cleanup of the drill clone requires separate user authorization.
+Do not delete `$drillRoot`. Report its exact path, the source and drill `HEAD`, authority `origin/main`, candidate remote-tracking ref, stable and RC tag targets, test counts, command results, and the fact that no live API, network fetch, push, PR change, merge, tag creation/movement, or Release occurred. Destructive cleanup of the drill clone requires separate user authorization.
 
 - [ ] **Step 7: Review the final implementation branch without publishing**
 
