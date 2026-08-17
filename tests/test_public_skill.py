@@ -42,7 +42,7 @@ class PublicSkillPrivacyTests(unittest.TestCase):
             content = path.read_text(encoding="utf-8")
             for forbidden in forbidden_paths:
                 self.assertNotIn(forbidden, content, f"公开文件泄露了本机路径: {path}")
-            self.assertNotIn("LUMENVERBA_API_KEY=", content, f"公开文件包含密钥赋值: {path}")
+            self.assertNotIn("LUMENVERBA_API_KEY" + "=", content, f"公开文件包含密钥赋值: {path}")
 
     def test_tracked_public_text_has_no_machine_specific_paths(self):
         result = subprocess.run(
@@ -247,11 +247,84 @@ class PortableClientTests(unittest.TestCase):
         payload = client.build_generation_request("海鸥在码头吃薯条")
 
         self.assertEqual(payload["model"], "gpt-image-2")
-        self.assertEqual(payload["size"], "1536x1024")
-        self.assertEqual(payload["quality"], "standard")
+        self.assertEqual(payload["size"], "auto")
+        self.assertEqual(payload["quality"], "medium")
         self.assertEqual(payload["n"], 1)
         self.assertTrue(payload["stream"])
         self.assertEqual(payload["partial_images"], 1)
+
+    def test_gpt_image_2_accepts_auto_and_flexible_sizes(self):
+        client = load_public_client()
+        valid_sizes = (
+            "auto",
+            "1024x640",
+            "1536x512",
+            "1280x768",
+            "1024x1024",
+            "1536x1024",
+            "1024x1536",
+            "2048x1152",
+            "2048x2048",
+            "3840x2160",
+            "2160x3840",
+        )
+
+        for size in valid_sizes:
+            with self.subTest(size=size):
+                payload = client.build_generation_request("测试", size=size)
+                self.assertEqual(payload["size"], size)
+
+    def test_gpt_image_2_accepts_official_quality_values(self):
+        client = load_public_client()
+
+        for quality in ("low", "medium", "high", "auto"):
+            with self.subTest(quality=quality):
+                payload = client.build_generation_request("测试", quality=quality)
+                self.assertEqual(payload["quality"], quality)
+
+    def test_custom_sizes_enforce_official_constraints(self):
+        client = load_public_client()
+        invalid_sizes = (
+            ("1024", "WIDTHxHEIGHT"),
+            ("1024X1024", "WIDTHxHEIGHT"),
+            ("0x1024", "大于 0"),
+            ("1025x1024", "16"),
+            ("3856x1024", "3840"),
+            ("2048x512", "3:1"),
+            ("1024x512", "655,360"),
+            ("3840x2176", "8,294,400"),
+        )
+
+        for size, message in invalid_sizes:
+            with self.subTest(size=size):
+                with self.assertRaisesRegex(ValueError, message):
+                    client.build_generation_request("测试", size=size)
+
+    def test_rejects_non_gpt_image_2_models_and_nonofficial_quality(self):
+        client = load_public_client()
+
+        for model in ("gpt-image-1", "gpt-image-1.5", "unknown"):
+            with self.subTest(model=model):
+                with self.assertRaisesRegex(ValueError, "不支持的模型"):
+                    client.build_generation_request("测试", model=model)
+
+        for quality in ("standard", "ultra"):
+            with self.subTest(quality=quality):
+                with self.assertRaisesRegex(ValueError, "不支持的质量"):
+                    client.build_generation_request("测试", quality=quality)
+
+    def test_every_command_accepts_the_same_flexible_size(self):
+        client = load_public_client()
+        commands = (
+            ["generate", "--prompt", "测试", "--size", "1280x768"],
+            ["edit", "--prompt", "测试", "--reference", "reference.png", "--size", "1280x768"],
+            ["text", "--text", "测试", "--description", "海报", "--size", "1280x768"],
+            ["batch", "--prompt", "一", "--prompt", "二", "--size", "1280x768"],
+        )
+
+        for argv in commands:
+            with self.subTest(command=argv[0]):
+                self.assertEqual(client._parser().parse_args(argv).size, "1280x768")
 
     def test_generation_count_is_limited_to_ten(self):
         client = load_public_client()
@@ -263,6 +336,50 @@ class PortableClientTests(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 with self.assertRaisesRegex(ValueError, "生成数量必须在 1 到 10 之间"):
                     client.build_generation_request("同一提示词", count=invalid)
+
+    def test_experimental_size_warns_once_without_changing_success_receipt(self):
+        client = load_public_client()
+        returned = [Path("C:/generated/experimental.png")]
+        stderr = StringIO()
+
+        with tempfile.TemporaryDirectory() as directory:
+            result_file = Path(directory) / "result.json"
+            with patch.object(client, "generate", return_value=returned):
+                with redirect_stdout(StringIO()), redirect_stderr(stderr):
+                    exit_code = client.main([
+                        "generate",
+                        "--prompt",
+                        "测试",
+                        "--size",
+                        "2048x2048",
+                        "--result-file",
+                        str(result_file),
+                    ])
+            receipt = json.loads(result_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue().count("WARNING: 实验分辨率"), 1)
+        self.assertEqual(receipt["status"], "success")
+        self.assertEqual(receipt["errors"], [])
+
+    def test_auto_and_regular_sizes_do_not_warn(self):
+        client = load_public_client()
+        returned = [Path("C:/generated/regular.png")]
+
+        for size in ("auto", "2048x1152"):
+            stderr = StringIO()
+            with self.subTest(size=size):
+                with patch.object(client, "generate", return_value=returned):
+                    with redirect_stdout(StringIO()), redirect_stderr(stderr):
+                        exit_code = client.main([
+                            "generate",
+                            "--prompt",
+                            "测试",
+                            "--size",
+                            size,
+                        ])
+                self.assertEqual(exit_code, 0)
+                self.assertNotIn("实验分辨率", stderr.getvalue())
 
     def test_generation_prompt_is_passed_through_verbatim(self):
         client = load_public_client()
@@ -405,7 +522,7 @@ class PortableClientTests(unittest.TestCase):
             first.write_bytes(PNG_BYTES)
             second.write_bytes(PNG_BYTES)
 
-            body, content_type = client.build_edit_request("保留人物姿势", [first, second], "gpt-image-2", "1024x1024", "standard")
+            body, content_type = client.build_edit_request("保留人物姿势", [first, second], "gpt-image-2", "1024x1024", "medium")
 
         self.assertIn(b'name="image[]"; filename="first.png"', body)
         self.assertIn(b'name="image[]"; filename="second.png"', body)
@@ -674,11 +791,46 @@ class PackagedSkillTests(unittest.TestCase):
             "edit",
             "text",
             "gpt-image-2",
-            "1536x1024",
-            "standard",
+            "auto",
+            "medium",
             "Read-Host",
             "AsSecureString",
             "SetEnvironmentVariable",
             "完全退出并重新打开 Codex",
         ):
             self.assertIn(expected, content)
+
+    def test_documentation_declares_flexible_gpt_image_2_sizes(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for content in (readme, skill):
+            for expected in (
+                "gpt-image-2",
+                "auto",
+                "medium",
+                "3840",
+                "16",
+                "3:1",
+                "655,360",
+                "8,294,400",
+                "3,686,400",
+                "https://developers.openai.com/api/docs/guides/image-generation#size-and-quality-options",
+            ):
+                with self.subTest(expected=expected):
+                    self.assertIn(expected, content)
+            self.assertNotIn("`standard`", content)
+            self.assertNotIn("`gpt-image-1`", content)
+            self.assertNotIn("`gpt-image-1.5`", content)
+
+        for preset in (
+            "1024x1024",
+            "1536x1024",
+            "1024x1536",
+            "2048x2048",
+            "2048x1152",
+            "3840x2160",
+            "2160x3840",
+        ):
+            with self.subTest(preset=preset):
+                self.assertIn(preset, skill)

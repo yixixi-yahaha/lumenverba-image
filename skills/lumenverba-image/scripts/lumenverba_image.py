@@ -8,6 +8,7 @@ import http.client
 import json
 import mimetypes
 import os
+import re
 import secrets
 import socket
 import ssl
@@ -24,11 +25,16 @@ from queue import Empty, SimpleQueue
 
 DEFAULT_BASE_URL = "https://api.lumenverba.cc/v1"
 DEFAULT_MODEL = "gpt-image-2"
-DEFAULT_SIZE = "1536x1024"
-DEFAULT_QUALITY = "standard"
-ALLOWED_MODELS = {"gpt-image-1", "gpt-image-1.5", "gpt-image-2"}
-ALLOWED_SIZES = {"1024x1024", "1536x1024", "1024x1536"}
-ALLOWED_QUALITIES = {"low", "standard", "high"}
+DEFAULT_SIZE = "auto"
+DEFAULT_QUALITY = "medium"
+ALLOWED_MODELS = {"gpt-image-2"}
+ALLOWED_QUALITIES = {"auto", "high", "low", "medium"}
+MIN_OUTPUT_PIXELS = 655_360
+MAX_OUTPUT_PIXELS = 8_294_400
+EXPERIMENTAL_OUTPUT_PIXELS = 2560 * 1440
+MAX_OUTPUT_EDGE = 3840
+OUTPUT_EDGE_MULTIPLE = 16
+MAX_OUTPUT_ASPECT_RATIO = 3
 MAX_REFERENCE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_GENERATION_COUNT = 10
@@ -85,6 +91,44 @@ def _select(value: str | None, allowed: set[str], default: str, label: str) -> s
     return selected
 
 
+def _size_dimensions(size: str) -> tuple[int, int]:
+    match = re.fullmatch(r"([0-9]+)x([0-9]+)", size)
+    if match is None:
+        raise ValueError(f"尺寸必须使用 WIDTHxHEIGHT 格式: {size}")
+    return int(match.group(1)), int(match.group(2))
+
+
+def _select_size(value: str | None) -> str:
+    selected = value or DEFAULT_SIZE
+    if selected == "auto":
+        return selected
+
+    width, height = _size_dimensions(selected)
+    if width <= 0 or height <= 0:
+        raise ValueError("尺寸两边必须大于 0。")
+    if max(width, height) > MAX_OUTPUT_EDGE:
+        raise ValueError("尺寸最长边不能超过 3840px。")
+    if width % OUTPUT_EDGE_MULTIPLE or height % OUTPUT_EDGE_MULTIPLE:
+        raise ValueError("尺寸两边必须是 16px 的倍数。")
+    if max(width, height) > min(width, height) * MAX_OUTPUT_ASPECT_RATIO:
+        raise ValueError("尺寸长边与短边之比不能超过 3:1。")
+
+    pixels = width * height
+    if pixels < MIN_OUTPUT_PIXELS:
+        raise ValueError("尺寸总像素不能少于 655,360。")
+    if pixels > MAX_OUTPUT_PIXELS:
+        raise ValueError("尺寸总像素不能超过 8,294,400。")
+    return selected
+
+
+def _is_experimental_size(value: str | None) -> bool:
+    selected = _select_size(value)
+    if selected == "auto":
+        return False
+    width, height = _size_dimensions(selected)
+    return width * height > EXPERIMENTAL_OUTPUT_PIXELS
+
+
 def _select_count(count: int) -> int:
     if not 1 <= count <= MAX_GENERATION_COUNT:
         raise ValueError("生成数量必须在 1 到 10 之间。")
@@ -103,7 +147,7 @@ def build_generation_request(
     return {
         "model": _select(model, ALLOWED_MODELS, DEFAULT_MODEL, "模型"),
         "prompt": prompt,
-        "size": _select(size, ALLOWED_SIZES, DEFAULT_SIZE, "尺寸"),
+        "size": _select_size(size),
         "quality": _select(quality, ALLOWED_QUALITIES, DEFAULT_QUALITY, "质量"),
         "n": _select_count(count),
         "stream": True,
@@ -479,7 +523,7 @@ def _parser() -> argparse.ArgumentParser:
     for command in ("generate", "edit", "text"):
         current = subcommands.add_parser(command)
         current.add_argument("--model", choices=sorted(ALLOWED_MODELS))
-        current.add_argument("--size", choices=sorted(ALLOWED_SIZES))
+        current.add_argument("--size", type=_select_size)
         current.add_argument("--quality", choices=sorted(ALLOWED_QUALITIES))
         current.add_argument("--output-dir", type=Path, default=Path.cwd() / "output")
         current.add_argument("--result-file", type=Path)
@@ -494,7 +538,7 @@ def _parser() -> argparse.ArgumentParser:
     subcommands.choices["text"].add_argument("--style")
     batch_parser = subcommands.add_parser("batch")
     batch_parser.add_argument("--model", choices=sorted(ALLOWED_MODELS))
-    batch_parser.add_argument("--size", choices=sorted(ALLOWED_SIZES))
+    batch_parser.add_argument("--size", type=_select_size)
     batch_parser.add_argument("--quality", choices=sorted(ALLOWED_QUALITIES))
     batch_parser.add_argument("--output-dir", type=Path, default=Path.cwd() / "output")
     batch_parser.add_argument("--result-file", type=Path)
@@ -580,6 +624,11 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.result_file is not None and not arguments.result_file.is_absolute():
         print("结果回执文件必须使用绝对路径。", file=sys.stderr)
         return 1
+    if _is_experimental_size(arguments.size):
+        print(
+            "WARNING: 实验分辨率的总像素超过 3,686,400，官方标记为 experimental；请求将继续执行。",
+            file=sys.stderr,
+        )
     paths: list[Path] = []
     errors: list[str] = []
     try:
