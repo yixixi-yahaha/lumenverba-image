@@ -33,4 +33,4 @@
 
 ## 交付格式
 
-临时 Agent 交付时必须报告：任务分支、提交 SHA、变更文件、测试命令和结果、未解决风险，以及未执行的联网或发布动作。主维护 Agent独立审查提交后，才决定是否 cherry-pick、push、更新 PR、merge、打标签或发布 Release。
+临时 Agent 交付时必须报告：任务分支、提交 SHA、变更文件、测试命令和结果、未解决风险，以及未执行的联网或发布动作。主维护 Agent 独立审查提交后，才决定是否 cherry-pick、push、更新 PR、merge、打标签或发布 Release。
