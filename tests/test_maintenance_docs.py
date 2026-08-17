@@ -1,4 +1,5 @@
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -8,6 +9,33 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def read_utf8(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def _is_known_safe_secret_fixture(path: str, line: str) -> bool:
+    assignment_literal = "LUMENVERBA_" + "API_KEY="
+    expected = (
+        'self.assertNotIn("'
+        + assignment_literal
+        + '", content, f"公开文件包含密钥赋值: {path}")'
+    )
+    return path == "tests/test_public_skill.py" and line.strip() == expected
+
+
+def suspected_secret_files(files: dict[str, str]) -> list[str]:
+    patterns = (
+        re.compile("sk-" + r"[A-Za-z0-9_-]{32,}"),
+        re.compile("LUMENVERBA_" + r"API_KEY\s*="),
+        re.compile("Authorization:" + r"\s*Bearer\s+[A-Za-z0-9._-]{12,}"),
+    )
+    offenders = set()
+    for path, content in files.items():
+        for line in content.splitlines():
+            if _is_known_safe_secret_fixture(path, line):
+                continue
+            if any(pattern.search(line) for pattern in patterns):
+                offenders.add(path)
+                break
+    return sorted(offenders)
 
 
 class AgentsInstructionsTests(unittest.TestCase):
@@ -74,6 +102,92 @@ class HandoffDocumentTests(unittest.TestCase):
 
         self.assertIn("开始任务时必须核对本地 refs", content)
         self.assertIn("不得把候选行为写成 main 已发布能力", content)
+        self.assertNotRegex(content, r"(?i)[a-z]:[\\/]+users[\\/]+")
+
+
+class SecretScanTests(unittest.TestCase):
+    def test_scanner_reports_only_filenames_for_suspected_values(self):
+        token = "sk-" + "x" * 40
+        key_assignment = "LUMENVERBA_" + "API_KEY=example"
+        bearer_value = "Authorization:" + " Bearer " + "a" * 20
+        files = {
+            "safe.txt": "ordinary documentation",
+            "token.txt": token,
+            "key.txt": key_assignment,
+            "bearer.txt": bearer_value,
+        }
+
+        result = suspected_secret_files(files)
+
+        self.assertEqual(["bearer.txt", "key.txt", "token.txt"], result)
+        self.assertNotIn(token, repr(result))
+        self.assertNotIn(key_assignment, repr(result))
+        self.assertNotIn(bearer_value, repr(result))
+
+    def test_scanner_allows_only_the_existing_privacy_assertion_fixture(self):
+        assignment_literal = "LUMENVERBA_" + "API_KEY="
+        fixture = (
+            'self.assertNotIn("'
+            + assignment_literal
+            + '", content, f"公开文件包含密钥赋值: {path}")'
+        )
+        files = {
+            "tests/test_public_skill.py": fixture,
+            "another_test.py": fixture,
+        }
+
+        self.assertEqual(["another_test.py"], suspected_secret_files(files))
+
+    def test_tracked_utf8_text_has_no_suspected_secret_values(self):
+        result = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        )
+        files = {}
+        for raw_path in result.stdout.split(b"\0"):
+            if not raw_path:
+                continue
+            relative = raw_path.decode("utf-8")
+            try:
+                files[relative] = read_utf8(relative)
+            except UnicodeDecodeError:
+                continue
+
+        self.assertEqual([], suspected_secret_files(files))
+
+
+class VerificationDocumentTests(unittest.TestCase):
+    def test_verification_document_contains_offline_and_authorization_gates(self):
+        content = read_utf8("docs/maintenance/VERIFICATION.md")
+        commands = (
+            "python -m unittest discover -s tests -v",
+            "python -m unittest discover -v",
+            "python -m compileall -q skills tests",
+            "lumenverba_image.py --help",
+            "lumenverba_image.py generate --help",
+            "lumenverba_image.py edit --help",
+            "lumenverba_image.py text --help",
+            "lumenverba_image.py batch --help",
+            "git diff --check",
+            "git status --short --branch",
+            "python -m unittest tests.test_maintenance_docs.SecretScanTests -v",
+        )
+        for expected in commands:
+            with self.subTest(expected=expected):
+                self.assertIn(expected, content)
+
+        for boundary in (
+            "不读取环境变量值",
+            "不调用真实 API",
+            "不得自动重试创建请求",
+            "单独明确授权",
+            "不得 push、修改 PR、merge、创建或移动 tag、创建 Release",
+        ):
+            with self.subTest(boundary=boundary):
+                self.assertIn(boundary, content)
+
         self.assertNotRegex(content, r"(?i)[a-z]:[\\/]+users[\\/]+")
 
 
