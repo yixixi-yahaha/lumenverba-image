@@ -42,7 +42,7 @@ class PublicSkillPrivacyTests(unittest.TestCase):
             content = path.read_text(encoding="utf-8")
             for forbidden in forbidden_paths:
                 self.assertNotIn(forbidden, content, f"公开文件泄露了本机路径: {path}")
-            self.assertNotIn("LUMENVERBA_API_KEY=", content, f"公开文件包含密钥赋值: {path}")
+            self.assertNotIn("LUMENVERBA_API_KEY" + "=", content, f"公开文件包含密钥赋值: {path}")
 
     def test_tracked_public_text_has_no_machine_specific_paths(self):
         result = subprocess.run(
