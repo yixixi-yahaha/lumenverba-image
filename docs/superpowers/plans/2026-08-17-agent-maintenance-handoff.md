@@ -356,13 +356,66 @@ git commit -m "docs: add version-aware maintenance handoff"
 
 **Interfaces:**
 - Consumes: `read_utf8(relative_path: str) -> str`, the project map from Task 2, and the existing CI commands.
-- Produces: exact preflight, focused, complete, diff, safe secret-scan, optional live-API, and delivery checks.
+- Produces: `suspected_secret_files(files: dict[str, str]) -> list[str]` plus exact preflight, focused, complete, diff, safe secret-scan, optional live-API, and delivery checks.
 
-- [ ] **Step 1: Add the failing verification-document test**
+- [ ] **Step 1: Add failing secret-scanner and verification-document tests**
 
-Insert this class before the `if __name__ == "__main__":` block in `tests/test_maintenance_docs.py`:
+Insert these classes before the `if __name__ == "__main__":` block in `tests/test_maintenance_docs.py`. The scanner function intentionally does not exist yet:
 
 ```python
+class SecretScanTests(unittest.TestCase):
+    def test_scanner_reports_only_filenames_for_suspected_values(self):
+        token = "sk-" + "x" * 40
+        key_assignment = "LUMENVERBA_" + "API_KEY=example"
+        bearer_value = "Authorization:" + " Bearer " + "a" * 20
+        files = {
+            "safe.txt": "ordinary documentation",
+            "token.txt": token,
+            "key.txt": key_assignment,
+            "bearer.txt": bearer_value,
+        }
+
+        result = suspected_secret_files(files)
+
+        self.assertEqual(["bearer.txt", "key.txt", "token.txt"], result)
+        self.assertNotIn(token, repr(result))
+        self.assertNotIn(key_assignment, repr(result))
+        self.assertNotIn(bearer_value, repr(result))
+
+    def test_scanner_allows_only_the_existing_privacy_assertion_fixture(self):
+        assignment_literal = "LUMENVERBA_" + "API_KEY="
+        fixture = (
+            'self.assertNotIn("'
+            + assignment_literal
+            + '", content, f"公开文件包含密钥赋值: {path}")'
+        )
+        files = {
+            "tests/test_public_skill.py": fixture,
+            "another_test.py": fixture,
+        }
+
+        self.assertEqual(["another_test.py"], suspected_secret_files(files))
+
+    def test_tracked_utf8_text_has_no_suspected_secret_values(self):
+        result = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        )
+        files = {}
+        for raw_path in result.stdout.split(b"\0"):
+            if not raw_path:
+                continue
+            relative = raw_path.decode("utf-8")
+            try:
+                files[relative] = read_utf8(relative)
+            except UnicodeDecodeError:
+                continue
+
+        self.assertEqual([], suspected_secret_files(files))
+
+
 class VerificationDocumentTests(unittest.TestCase):
     def test_verification_document_contains_offline_and_authorization_gates(self):
         content = read_utf8("docs/maintenance/VERIFICATION.md")
@@ -377,7 +430,7 @@ class VerificationDocumentTests(unittest.TestCase):
             "lumenverba_image.py batch --help",
             "git diff --check",
             "git status --short --branch",
-            "git grep -l -I -E",
+            "python -m unittest tests.test_maintenance_docs.SecretScanTests -v",
         )
         for expected in commands:
             with self.subTest(expected=expected):
@@ -396,17 +449,48 @@ class VerificationDocumentTests(unittest.TestCase):
         self.assertNotRegex(content, r"(?i)[a-z]:[\\/]+users[\\/]+")
 ```
 
-- [ ] **Step 2: Run the verification-document test and verify RED**
+- [ ] **Step 2: Run the new tests and verify RED**
 
 Run:
 
 ```powershell
+python -m unittest tests.test_maintenance_docs.SecretScanTests -v
 python -m unittest tests.test_maintenance_docs.VerificationDocumentTests -v
 ```
 
-Expected: the test errors with `FileNotFoundError` for `docs/maintenance/VERIFICATION.md`.
+Expected: the scanner tests error with `NameError: name 'suspected_secret_files' is not defined`; the verification-document test errors with `FileNotFoundError` for `docs/maintenance/VERIFICATION.md`.
 
-- [ ] **Step 3: Write the verification document**
+- [ ] **Step 3: Implement the safe scanner and write the verification document**
+
+Add `import subprocess` beside the existing imports in `tests/test_maintenance_docs.py`, then insert these helpers after `read_utf8()`:
+
+```python
+def _is_known_safe_secret_fixture(path: str, line: str) -> bool:
+    assignment_literal = "LUMENVERBA_" + "API_KEY="
+    expected = (
+        'self.assertNotIn("'
+        + assignment_literal
+        + '", content, f"公开文件包含密钥赋值: {path}")'
+    )
+    return path == "tests/test_public_skill.py" and line.strip() == expected
+
+
+def suspected_secret_files(files: dict[str, str]) -> list[str]:
+    patterns = (
+        re.compile("sk-" + r"[A-Za-z0-9_-]{32,}"),
+        re.compile("LUMENVERBA_" + r"API_KEY\s*="),
+        re.compile("Authorization:" + r"\s*Bearer\s+[A-Za-z0-9._-]{12,}"),
+    )
+    offenders = set()
+    for path, content in files.items():
+        for line in content.splitlines():
+            if _is_known_safe_secret_fixture(path, line):
+                continue
+            if any(pattern.search(line) for pattern in patterns):
+                offenders.add(path)
+                break
+    return sorted(offenders)
+```
 
 Create `docs/maintenance/VERIFICATION.md` with this content:
 
@@ -467,22 +551,13 @@ git diff --check
 
 ## 4. 疑似凭据安全扫描
 
-扫描只输出文件名，不输出匹配行，从而避免把疑似密钥写入日志。验证文档自身包含检测表达式，因此从扫描范围中排除本文件。
+专用测试扫描全部 Git 跟踪的 UTF-8 文本，二进制文件跳过；结果只包含文件名，不包含匹配行或疑似值。现有 `tests/test_public_skill.py` 中用于断言禁止赋值的字面量只按准确文件路径和准确整行放行，不排除整个文件或目录。
 
 ```powershell
-$pattern = '(sk-[A-Za-z0-9_-]{12,}|LUMENVERBA_API_KEY[[:space:]]*=|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]+)'
-git grep -l -I -E $pattern -- . ':!docs/maintenance/VERIFICATION.md'
-if ($LASTEXITCODE -eq 1) {
-    Write-Host 'No suspected secret values found.'
-    $global:LASTEXITCODE = 0
-} elseif ($LASTEXITCODE -eq 0) {
-    throw 'Suspected secret value found in the listed tracked file(s).'
-} else {
-    throw 'Secret scan failed to run.'
-}
+python -m unittest tests.test_maintenance_docs.SecretScanTests -v
 ```
 
-预期：只输出 `No suspected secret values found.`。若列出文件名，只报告文件名并停止；不得显示匹配内容，不读取、输出或记录密钥值。
+预期：3 个扫描测试全部通过。失败信息只能列出可疑文件名；不得显示匹配内容，不读取、输出或记录密钥值。
 
 ## 5. 差异与提交检查
 
@@ -524,6 +599,7 @@ git status --short --branch
 Run:
 
 ```powershell
+python -m unittest tests.test_maintenance_docs.SecretScanTests -v
 python -m unittest tests.test_maintenance_docs.VerificationDocumentTests -v
 python -m unittest tests.test_maintenance_docs -v
 ```
@@ -532,9 +608,9 @@ Expected: all tests pass.
 
 - [ ] **Step 5: Run the documented safe secret scan exactly as written**
 
-Run the PowerShell block from `docs/maintenance/VERIFICATION.md` section 4.
+Run the command from `docs/maintenance/VERIFICATION.md` section 4.
 
-Expected: exit code 0 and only `No suspected secret values found.`; no matching content is printed.
+Expected: exit code 0 and 3 passing tests; no matching content is printed.
 
 - [ ] **Step 6: Commit the verification document**
 
