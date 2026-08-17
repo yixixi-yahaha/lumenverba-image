@@ -247,11 +247,84 @@ class PortableClientTests(unittest.TestCase):
         payload = client.build_generation_request("海鸥在码头吃薯条")
 
         self.assertEqual(payload["model"], "gpt-image-2")
-        self.assertEqual(payload["size"], "1536x1024")
-        self.assertEqual(payload["quality"], "standard")
+        self.assertEqual(payload["size"], "auto")
+        self.assertEqual(payload["quality"], "medium")
         self.assertEqual(payload["n"], 1)
         self.assertTrue(payload["stream"])
         self.assertEqual(payload["partial_images"], 1)
+
+    def test_gpt_image_2_accepts_auto_and_flexible_sizes(self):
+        client = load_public_client()
+        valid_sizes = (
+            "auto",
+            "1024x640",
+            "1536x512",
+            "1280x768",
+            "1024x1024",
+            "1536x1024",
+            "1024x1536",
+            "2048x1152",
+            "2048x2048",
+            "3840x2160",
+            "2160x3840",
+        )
+
+        for size in valid_sizes:
+            with self.subTest(size=size):
+                payload = client.build_generation_request("测试", size=size)
+                self.assertEqual(payload["size"], size)
+
+    def test_gpt_image_2_accepts_official_quality_values(self):
+        client = load_public_client()
+
+        for quality in ("low", "medium", "high", "auto"):
+            with self.subTest(quality=quality):
+                payload = client.build_generation_request("测试", quality=quality)
+                self.assertEqual(payload["quality"], quality)
+
+    def test_custom_sizes_enforce_official_constraints(self):
+        client = load_public_client()
+        invalid_sizes = (
+            ("1024", "WIDTHxHEIGHT"),
+            ("1024X1024", "WIDTHxHEIGHT"),
+            ("0x1024", "大于 0"),
+            ("1025x1024", "16"),
+            ("3856x1024", "3840"),
+            ("2048x512", "3:1"),
+            ("1024x512", "655,360"),
+            ("3840x2176", "8,294,400"),
+        )
+
+        for size, message in invalid_sizes:
+            with self.subTest(size=size):
+                with self.assertRaisesRegex(ValueError, message):
+                    client.build_generation_request("测试", size=size)
+
+    def test_rejects_non_gpt_image_2_models_and_nonofficial_quality(self):
+        client = load_public_client()
+
+        for model in ("gpt-image-1", "gpt-image-1.5", "unknown"):
+            with self.subTest(model=model):
+                with self.assertRaisesRegex(ValueError, "不支持的模型"):
+                    client.build_generation_request("测试", model=model)
+
+        for quality in ("standard", "ultra"):
+            with self.subTest(quality=quality):
+                with self.assertRaisesRegex(ValueError, "不支持的质量"):
+                    client.build_generation_request("测试", quality=quality)
+
+    def test_every_command_accepts_the_same_flexible_size(self):
+        client = load_public_client()
+        commands = (
+            ["generate", "--prompt", "测试", "--size", "1280x768"],
+            ["edit", "--prompt", "测试", "--reference", "reference.png", "--size", "1280x768"],
+            ["text", "--text", "测试", "--description", "海报", "--size", "1280x768"],
+            ["batch", "--prompt", "一", "--prompt", "二", "--size", "1280x768"],
+        )
+
+        for argv in commands:
+            with self.subTest(command=argv[0]):
+                self.assertEqual(client._parser().parse_args(argv).size, "1280x768")
 
     def test_generation_count_is_limited_to_ten(self):
         client = load_public_client()
@@ -405,7 +478,7 @@ class PortableClientTests(unittest.TestCase):
             first.write_bytes(PNG_BYTES)
             second.write_bytes(PNG_BYTES)
 
-            body, content_type = client.build_edit_request("保留人物姿势", [first, second], "gpt-image-2", "1024x1024", "standard")
+            body, content_type = client.build_edit_request("保留人物姿势", [first, second], "gpt-image-2", "1024x1024", "medium")
 
         self.assertIn(b'name="image[]"; filename="first.png"', body)
         self.assertIn(b'name="image[]"; filename="second.png"', body)
